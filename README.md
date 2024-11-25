@@ -1,6 +1,6 @@
 # Avoid Everything: Model-Free Collision Avoidance with Expert-Guided Fine-Tuning
 
-This repository will contain the official implementation of the paper **"Avoid Everything: Model-Free Collision Avoidance with Expert-Guided Fine-Tuning"** presented at CoRL 2024 by Fishman et al. from the University of Washington and NVIDIA Inc.
+This repository contain the (currently partially complete) official implementation of the paper **"Avoid Everything: Model-Free Collision Avoidance with Expert-Guided Fine-Tuning"** presented at CoRL 2024 by Fishman et al. from the University of Washington and NVIDIA Inc.
 
 ## Overview
 
