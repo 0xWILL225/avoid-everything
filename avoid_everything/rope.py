@@ -1,4 +1,5 @@
 import copy
+from typing import Callable
 
 import torch
 import torch.nn.functional as F
@@ -50,6 +51,10 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyNetwork):
         self.batch_cache: dict[str, torch.Tensor] = {}
 
     def configure_optimizers(self):
+        """
+        Uses the same optimizer as the pretraining model but uses the ROPE step instead of
+        the data loader step (the ROPE step is determined by whether enough failures were encountered)
+        """
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.min_lr, weight_decay=1e-4, betas=(0.9, 0.95)
         )
@@ -164,28 +169,39 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyNetwork):
     def state_based_step(
         self, batch: dict[str, torch.Tensor]
     ) -> tuple[torch.Tensor, torch.Tensor] | None:  # type: ignore[override]
+        """
+        Performs a ROPE step by rolling out trajectories until collisions are encountered, then
+        """
         batch, _ = self.rollout_until_collisions(
             batch,
             rollout_length=50,
             sampler=self.sample,
             correction_percent=self.hard_negative_ratio,
         )
+        # Downsamples the batch to the desired batch size and resolved cache
         downsampled_batch = self.downsample_batch(batch)
         if downsampled_batch is None:
-            # Could also do variable batch sizes here to get more corrections
+            # If there weren't enough corrections, we don't do anything
             return None
+        # Optimizes the supervision for the downsampled batch
         update_batch = self.optimize_supervision(downsampled_batch, 0.001)
         if update_batch is None:
             return None
+        # Mark this as a successful ROPE step
         self.corrected_step += 1
         self.log("corrected_step", self.corrected_step)
+        # Performs a forward and backward pass on the updated batch
         return super().state_based_step(update_batch)
 
     def optimize_supervision(
         self,
-        batch,
-        margin,
-    ):
+        batch: dict[str, torch.Tensor],
+        margin: float,
+    ) -> dict[str, torch.Tensor] | None:
+        """
+        Optimizes the supervision for a batch of trajectories using Adam to full the configuration out of collision.
+        """
+        # Gets the mask and the supervision
         mask = batch["needs_correction"]
         sv = unnormalize_franka_joints(batch["supervision"][mask].squeeze(1))
         cuboids = TorchCuboids(
@@ -236,21 +252,35 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyNetwork):
             optimizer.step()
         return None
 
-    def downsample_batch(self, batch):
+    def downsample_batch(
+        self, batch: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor] | None:
+        """
+        Resolves the batch from the cache and downsamples it to the desired batch size.
+        """
+        # First uses the cache to get a batch with the specified ratio of corrections
         batch = self.resolve_batch_from_cache(batch)
         if batch is None:
             return None
 
         N = torch.count_nonzero(batch["needs_correction"])
+        # Initializes a mask that we'll use to downsample
         mask = torch.zeros_like(batch["needs_correction"])
+        # These are the trajectories that will be corrected
         corrected = mask[batch["needs_correction"]]
+        # These are the trajectories that will not be corrected
         uncorrected = mask[~batch["needs_correction"]]
-        # Currently using all of the corrections
+        # If for some reason, the number of trajectories in the batch that
+        # need corrections is larger than the batch size, we only use a subset of the corrections
+        # (and no uncorrected trajectories)
         if N >= self.train_batch_size:
             corrected[: self.train_batch_size] = True
         else:
+            # Otherwise, we use all of the corrections and fill the rest of the batch
+            # with uncorrected trajectories
             corrected[...] = True
             uncorrected[: self.train_batch_size - N] = True
+        # Uses this logic to specify which trajectory results to keep
         mask[batch["needs_correction"]] = corrected
         mask[~batch["needs_correction"]] = uncorrected
 
@@ -262,8 +292,15 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyNetwork):
 
     @torch.no_grad()
     def rollout_until_collisions(
-        self, batch, rollout_length, sampler, correction_percent
-    ):
+        self,
+        batch: dict[str, torch.Tensor],
+        rollout_length: int,
+        sampler: Callable,
+        correction_percent: float,
+    ) -> tuple[dict[str, torch.Tensor], bool]:
+        """
+        Rolls out a batch of trajectories until each either collides, reaches the target, or times out.
+        """
         clean_batch = copy.deepcopy(batch)
         xyz_labels, xyz, q, target_position, target_orientation = (
             batch["xyz_labels"],
@@ -298,8 +335,8 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyNetwork):
         supervision = torch.zeros_like(q)
         # The goal with this loop is to roll out every starting element in the batch
         # for a fixed number of steps.
-        # If one of the rollouts hits a collision, we stop.
-        # If one of the rollouts hits the end of its trajectory, we stop
+        # If one of the rollouts hits a collision, we stop that rollout.
+        # If one of the rollouts hits the end of its trajectory, we stop that rollout.
 
         # Initialize mask that represents the trajectories that need more steps
         mask = ~torch.logical_or(needs_correction, reached_target)
@@ -356,7 +393,15 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyNetwork):
         clean_batch["needs_correction"] = needs_correction
         return clean_batch, success
 
-    def check_reaching_success(self, q_unnorm, target_position, target_orientation):
+    def check_reaching_success(
+        self,
+        q_unnorm: torch.Tensor,
+        target_position: torch.Tensor,
+        target_orientation: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Checks if a batch of trajectories has reached the target position and orientation within a tolerance.
+        """
         assert self.fk_sampler is not None
         eff_poses = self.fk_sampler.end_effector_pose(q_unnorm, self.prismatic_joint)
         pos_errors = torch.linalg.vector_norm(
@@ -371,7 +416,12 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyNetwork):
         orien_errors = torch.abs(torch.rad2deg(torch.acos(cos_value)))
         return torch.logical_and(orien_errors < 15, pos_errors < 0.01)
 
-    def check_for_collisions(self, q_unnorm, cuboids, cylinders):
+    def check_for_collisions(
+        self, q_unnorm: torch.Tensor, cuboids: TorchCuboids, cylinders: TorchCylinders
+    ) -> torch.Tensor:
+        """
+        Checks if a batch of joint configurations has collided with their environments.
+        """
         assert self.collision_sampler is not None
         collision_spheres = self.collision_sampler.compute_spheres(
             q_unnorm, prismatic_joint=self.prismatic_joint

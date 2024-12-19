@@ -57,7 +57,7 @@ from avoid_everything.type_defs import (
 )
 
 SEQUENCE_LENGTH = 60  # The final sequence length
-GLOBAL_TIMESTEP = 0.055
+PLANNER_TIMESTEP = 0.055
 
 NUM_SCENES = 70  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
@@ -88,7 +88,16 @@ class Result:
     global_solution: np.ndarray = field(default_factory=lambda: np.array([]))
 
 
-def make_arrays(cuboids, cylinders):
+def make_arrays(
+    cuboids: List[Cuboid], cylinders: List[Cylinder]
+) -> List[Union[CuboidArray, CylinderArray]]:
+    """
+    Create obstacle arrays from the cuboids and cylinders.
+
+    :param cuboids: List[Cuboid]
+    :param cylinders: List[Cylinder]
+    :return: List[Union[CuboidArray, CylinderArray]]
+    """
     arrays = []
     if len(cuboids) > 0:
         arrays.append(CuboidArray(cuboids))
@@ -121,7 +130,7 @@ def solve_global_plan(
     planner = FrankaAITStar(
         PRISMATIC_JOINT,
         scene_buffer=planning_buffer,
-        self_collision_buffer=SELF_COLLISION_BUFFER,
+        self_collision_buffer=0.0,
         real=True,
         joint_range_scalar=JOINT_RANGE_SCALAR,
     )
@@ -139,7 +148,7 @@ def solve_global_plan(
     )
     if path is None:
         return np.array([]), np.array([])
-    forward_smoothed = np.asarray(planner.smooth(path, fixed_timestep=GLOBAL_TIMESTEP))
+    forward_smoothed = np.asarray(planner.smooth(path, fixed_timestep=PLANNER_TIMESTEP))
     if len(forward_smoothed) > SEQUENCE_LENGTH:
         return np.array([]), np.array([])
     for q in forward_smoothed:
@@ -148,11 +157,11 @@ def solve_global_plan(
             PRISMATIC_JOINT,
             obstacle_arrays,
             scene_buffer=COLLISION_BUFFER,
-            self_collision_buffer=SELF_COLLISION_BUFFER,
+            self_collision_buffer=0.0,
         ):
             return np.array([]), np.array([])
     backward_smoothed = np.asarray(
-        planner.smooth(path[::-1], fixed_timestep=GLOBAL_TIMESTEP)
+        planner.smooth(path[::-1], fixed_timestep=PLANNER_TIMESTEP)
     )
     if len(backward_smoothed) > SEQUENCE_LENGTH:
         return np.array([]), np.array([])
@@ -162,7 +171,7 @@ def solve_global_plan(
             PRISMATIC_JOINT,
             obstacle_arrays,
             scene_buffer=COLLISION_BUFFER,
-            self_collision_buffer=SELF_COLLISION_BUFFER,
+            self_collision_buffer=0.0,
         ):
             return np.array([]), np.array([])
     return forward_smoothed, backward_smoothed
@@ -267,7 +276,7 @@ def verify_has_solvable_problems(env: Environment) -> bool:
     planner = FrankaRRTConnect(
         PRISMATIC_JOINT,
         scene_buffer=COLLISION_BUFFER,
-        self_collision_buffer=SELF_COLLISION_BUFFER,
+        self_collision_buffer=0.0,
         joint_range_scalar=JOINT_RANGE_SCALAR,
     )
     planner.load_scene(env.obstacle_arrays)

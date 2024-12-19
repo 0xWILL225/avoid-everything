@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Tuple
 
 import lightning.pytorch as pl
 import torch
@@ -79,6 +79,10 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
         self.corrected_step = 0
 
     def configure_optimizers(self):
+        """
+        Configures the optimizer and scheduler.
+        """
+
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.min_lr, weight_decay=1e-4, betas=(0.9, 0.95)
         )
@@ -100,11 +104,18 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
     def get_device(self):
+        """
+        Get the device for this model. Comes from the trainer if available, otherwise
+        uses the device attribute.
+        """
         if self._trainer is not None:
             return self.trainer.strategy.root_device
         return self.device
 
     def setup(self):
+        """
+        Sets up the model by getting the device and initializing the collision and FK samplers.
+        """
         device = self.get_device()
         self.collision_sampler = TorchFrankaCollisionSampler(
             device, with_base_link=False
@@ -259,7 +270,16 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
         points = self.fk_sampler.sample(q, self.prismatic_joint)
         return points
 
-    def target_error(self, batch, rollouts):
+    def target_error(
+        self, batch: dict[str, torch.Tensor], rollouts: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Calculates the position and orientation errors between the rollouts and the target.
+
+        :param batch: The batch of data that was used to generate the rollouts.
+        :param rollouts: The rollouts to calculate the errors for.
+        :return: A tuple containing the position error and the orientation error.
+        """
         assert self.fk_sampler is not None
         eff = self.fk_sampler.end_effector_pose(rollouts[:, -1], self.prismatic_joint)
         position_error = torch.linalg.vector_norm(
@@ -313,6 +333,9 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
         return has_collision
 
     def state_validation_step(self, batch: dict[str, torch.Tensor]):
+        """
+        Performs a validation step by calculating losses on single step prediction.
+        """
         losses = self.state_based_step(batch)
         if losses is None:
             return None
@@ -325,7 +348,14 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
         )
         self.val_loss.update(val_loss)
 
-    def end_rollouts_at_target(self, batch, rollouts):
+    def end_rollouts_at_target(
+        self, batch: dict[str, torch.Tensor], rollouts: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Ends the rollouts at the target position and orientation, padding the rest of each successful
+        trajectory with the last successful configuration. Also returns the length up until success
+        and a mask indicating which rollouts have successful configurations.
+        """
         B = rollouts.size(0)
         assert self.fk_sampler is not None
         eff_poses = self.fk_sampler.end_effector_pose(
@@ -379,6 +409,9 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
     def trajectory_validation_step(
         self, batch: dict[str, torch.Tensor], dataloader_idx: int
     ) -> torch.Tensor:
+        """
+        Performs a validation step by calculating metrics on rollouts.
+        """
         rollouts = self.rollout(batch, 69, self.sample)
         rollouts, _, has_reaching_success = self.end_rollouts_at_target(batch, rollouts)
         position_error, orientation_error = self.target_error(batch, rollouts)
@@ -398,12 +431,18 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
     def validation_step(  # type: ignore[override]
         self, batch: dict[str, torch.Tensor], _batch_idx: int, dataloader_idx: int
     ) -> torch.Tensor:
+        """
+        Performs all validation steps based on dataset type.
+        """
         if dataloader_idx == DatasetType.VAL_STATE:
             return self.state_validation_step(batch)
         if dataloader_idx in [DatasetType.VAL, DatasetType.MINI_TRAIN]:
             return self.trajectory_validation_step(batch, dataloader_idx)
 
     def on_validation_epoch_end(self):
+        """
+        Logs validation metrics.
+        """
         self.log("avg_val_target_error", self.val_position_error)
         self.log("avg_val_orientation_error", self.val_orientation_error)
         self.log("avg_val_collision_rate", self.val_collision_rate)

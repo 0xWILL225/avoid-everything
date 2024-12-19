@@ -62,7 +62,10 @@ class MultiHeadAttention(nn.Module):
         key: torch.Tensor,
         value: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-    ):
+    ) -> torch.Tensor:
+        """
+        Performs multi-head attention on a batch of trajectories.
+        """
         seq_len, batch_size, _ = query.shape
         if mask is not None:
             mask = self.prepare_mask(mask, query.shape, key.shape)

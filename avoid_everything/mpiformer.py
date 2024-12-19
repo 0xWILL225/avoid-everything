@@ -20,7 +20,7 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import lightning.pytorch as pl
 import numpy as np
@@ -72,13 +72,19 @@ class PositionEncoding3D(nn.Module):
 
 
 class SAModule(nn.Module):
-    def __init__(self, ratio, r, nn):
+    """
+    Set aggregation module from PointNet++ (based on implementation in pytorch geometric).
+    """
+
+    def __init__(self, ratio: float, r: float, net: nn.Module):
         super().__init__()
         self.ratio = ratio
         self.r = r
-        self.conv = PointNetConv(nn, add_self_loops=False)
+        self.conv = PointNetConv(net, add_self_loops=False)
 
-    def forward(self, x, pos, batch):
+    def forward(
+        self, x: torch.Tensor, pos: torch.Tensor, batch: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         idx = fps(pos, batch, ratio=self.ratio)
         row, col = radius(
             pos, pos[idx], self.r, batch, batch[idx], max_num_neighbors=64
@@ -91,7 +97,7 @@ class SAModule(nn.Module):
 
 
 class MPiFormerPointNet(nn.Module):
-    def __init__(self, num_robot_points, input_feature_dim, d_model):
+    def __init__(self, num_robot_points: int, input_feature_dim: int, d_model: int):
         super().__init__()
         # Input channels account for both `pos` and node features.
         self.sa1_module = SAModule(
@@ -154,7 +160,7 @@ class MotionPolicyTransformer(nn.Module):
 
     def __init__(
         self,
-        num_robot_points,
+        num_robot_points: int,
         *,
         feature_dim: int = 4,
         n_heads: int = 8,

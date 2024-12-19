@@ -192,7 +192,16 @@ class Environment(ABC):
         pass
 
 
-def min_franka_eef_distance(pose, prismatic_joint, cooo, primitive_arrays, frame):
+def min_franka_eef_distance(
+    pose: np.ndarray,
+    prismatic_joint: float,
+    cooo: FrankaCollisionSpheres,
+    primitive_arrays: List[Union[Cuboid, Cylinder]],
+    frame: str,
+) -> float:
+    """
+    Computes the minimum distance between the Franka's end effector and the primitives in the scene.
+    """
     cspheres = cooo.eef_csphere_info(pose, prismatic_joint, frame)
     distances = [
         np.min(arr.scene_sdf(cspheres.centers) - cspheres.radii)
@@ -202,11 +211,14 @@ def min_franka_eef_distance(pose, prismatic_joint, cooo, primitive_arrays, frame
 
 
 def min_franka_arm_distance(
-    q,
-    prismatic_joint,
-    cooo,
-    primitive_arrays,
-):
+    q: np.ndarray,
+    prismatic_joint: float,
+    cooo: FrankaCollisionSpheres,
+    primitive_arrays: List[Union[Cuboid, Cylinder]],
+) -> float:
+    """
+    Computes the minimum distance between the Franka's arm and the primitives in the scene.
+    """
     cspheres = cooo.csphere_info(q, prismatic_joint)
     distances = [
         np.min(arr.scene_sdf(cspheres.centers) - cspheres.radii)

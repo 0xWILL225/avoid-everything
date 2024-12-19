@@ -2,17 +2,22 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from functools import wraps
+from typing import Callable
 
 import h5py
 import numpy as np
 from geometrout.primitive import Cuboid, CuboidArray, Cylinder, CylinderArray
 from robofin.robots import FrankaRobot
 from tqdm.auto import tqdm, trange
+from pathlib import Path
 
 from avoid_everything.type_defs import PlanningProblem
 
 
-def chunk_indices(indices, chunk_size):
+def chunk_indices(indices: np.ndarray, chunk_size: int) -> list[np.ndarray]:
+    """
+    Chunks a list of indices into smaller lists of a specified size.
+    """
     nchunks = len(indices) // chunk_size
     chunks = [
         np.asarray(indices[i * chunk_size : (i + 1) * chunk_size])
@@ -24,6 +29,10 @@ def chunk_indices(indices, chunk_size):
 
 @dataclass
 class FlattenedObstacles:
+    """
+    Represents a set of obstacles in a planning problem as something hashable.
+    """
+
     cuboid_centers: np.ndarray
     cuboid_dims: np.ndarray
     cuboid_quaternions: np.ndarray
@@ -53,7 +62,11 @@ class FlattenedObstacles:
         )
 
 
-def check_file(fn):
+def check_file(fn: Callable) -> Callable:
+    """
+    Checks if the HDF5 file is open before calling the decorated function.
+    """
+
     @wraps(fn)
     def wrapper(self, *args, **kw):
         assert self.file.id, "HDF5 file must be open to access data"
@@ -68,11 +81,17 @@ PERSISTENT_KEY = "cuboid_centers"  # An always present key that has the length o
 WELL_INDEXED = "well_indexed"
 
 
-def _index(key):
+def _index(key: str) -> str:
+    """
+    Creates a key for indexing a dataset's steps.
+    """
     return f"{key}{INDEX_SPECIAL_TOKEN}"
 
 
-def _pindex(key):
+def _pindex(key: str) -> str:
+    """
+    Creates a key for indexing the planning problems in the dataset.
+    """
     return f"{key}{LENGTHS_SPECIAL_TOKEN}"
 
 
@@ -95,16 +114,22 @@ class UnindexedKeyedData:
 
     @property
     def well_indexed(self):
+        """
+        Checks if the dataset is well-indexed.
+        """
         return self.file[self.key].attrs[WELL_INDEXED]
 
     @property
     def pindex(self):
+        """
+        Gets the key for indexing the planning problems in the dataset.
+        """
         return _pindex(self.key)
 
     @property
     def index(self):
         """
-        Using a nonsensical key to prevent mixups
+        Gets the key for indexing the steps in the dataset
         """
         return _index(self.key)
 
@@ -117,15 +142,24 @@ class UnindexedKeyedData:
         return np.flatnonzero(self.file[self.pindex])
 
     @check_file
-    def expert_length(self, pidx):
+    def expert_length(self, pidx: int) -> int:
+        """
+        Gets the length of the expert's solution for a given planning problem.
+        """
         return self.file[self.pindex][pidx]
 
     @check_file
-    def max_expert_length(self):
+    def max_expert_length(self) -> int:
+        """
+        Gets the maximum length of the expert's solution for all planning problems.
+        """
         return self.file[self.key].shape[1]
 
     @check_file
-    def set_expert(self, pidx, expert):
+    def set_expert(self, pidx: int, expert: np.ndarray):
+        """
+        Sets the expert's solution for a given planning problem.
+        """
         assert self.mode in ("w", "w-", "r+")
         T = len(expert)
         assert T <= self.max_expert_length()
@@ -138,11 +172,17 @@ class UnindexedKeyedData:
 
     @check_file
     def guard_pindex(self):
+        """
+        Checks if the planning problem indexing key is present in the dataset.
+        """
         if self.pindex not in self.file.keys():
             raise KeyError(f"{self.pindex} not found in dataset")
 
     @check_file
-    def problem(self, pidx):
+    def problem(self, pidx: int) -> PlanningProblem:
+        """
+        Gets the planning problem for a given planning problem index.
+        """
         obstacles = []
         if "cuboid_centers" in self.file.keys():
             for c, d, q in zip(
@@ -171,7 +211,10 @@ class UnindexedKeyedData:
         )
 
     @check_file
-    def robometrics_problem(self, pidx, world_frame, eff_frame):
+    def robometrics_problem(self, pidx: int, world_frame: str, eff_frame: str) -> dict:
+        """
+        Gets the planning problem for a given planning problem index in the format expected by RoboMetrics.
+        """
         problem = self.problem(pidx)
         goal_pose = FrankaRobot.fk(problem.target, eff_frame=eff_frame)
         cuboids = []
@@ -215,7 +258,10 @@ class UnindexedKeyedData:
         }
 
     @check_file
-    def primitive_arrays(self, pidx):
+    def primitive_arrays(self, pidx: int) -> list[CuboidArray | CylinderArray]:
+        """
+        Gets the primitive arrays for a given planning problem index.
+        """
         ret = []
         if "cuboid_centers" in self.file.keys():
             cuboids = []
@@ -245,7 +291,10 @@ class UnindexedKeyedData:
         return ret
 
     @check_file
-    def flattened_obstacles(self, pidx):
+    def flattened_obstacles(self, pidx: int) -> FlattenedObstacles:
+        """
+        Gets the flattened obstacles for a given planning problem index.
+        """
         if "cuboid_centers" in self.file.keys():
             cuboid_dims = self.file["cuboid_dims"][pidx]
             if cuboid_dims.ndim == 1:
@@ -303,31 +352,36 @@ class UnindexedKeyedData:
         )
 
     @check_file
-    def scene_hash(self, pidx, precision=6):
+    def scene_hashable(self, pidx: int, precision: int = 6) -> str:
+        """
+        Gets a hashable representation of the scene for a given planning problem index.
+        """
         flobs = self.flattened_obstacles(pidx)
         return flobs.hashable(precision)
 
     @check_file
-    def one_pidx_per_scene(self, precision=6):
-        """Returns indices of problems with no scene duplicates."""
+    def one_pidx_per_scene(self, precision: int = 6) -> list[int]:
+        """Returns indices of a set of problems with no scene duplicates."""
         all_indices = self.get_expert_indices()
         scenes = set()
         pidxs = []
         for pidx in tqdm(all_indices, desc="Hashing scenes"):
-            key = self.scene_hash(pidx, precision)
+            key = self.scene_hashable(pidx, precision)
             if key not in scenes:
                 scenes.add(key)
                 pidxs.append(pidx)
         return pidxs
 
     @check_file
-    def partition_by_scene(self, approx_subset_size, precision=6):
-        """Partitions into two subsets with no overlapping scenes."""
+    def partition_by_scene(
+        self, approx_subset_size: int, precision: int = 6
+    ) -> tuple[list[int], list[int]]:
+        """Partitions a dataset into two subsets with no overlapping scenes."""
         all_indices = self.get_expert_indices()
         assert approx_subset_size <= len(all_indices)
         scenes = {}
         for pidx in tqdm(all_indices, desc="Hashing scenes"):
-            key = self.scene_hash(pidx, precision)
+            key = self.scene_hashable(pidx, precision)
             scenes[key] = scenes.get(key, []) + [pidx]
         chunk1, chunk2 = [], []
         for key, pidxs in tqdm(scenes.items(), desc="Splitting"):
@@ -339,18 +393,27 @@ class UnindexedKeyedData:
         return chunk1, chunk2
 
     @check_file
-    def padded_expert(self, pidx):
+    def padded_expert(self, pidx: int) -> np.ndarray:
+        """
+        Pads the expert's solution for a given planning problem index to the maximum length.
+        """
         H = self.file[self.key].shape[1]
         T = self.expert_length(pidx)
         return np.pad(self.file[self.key][pidx, :T], ((0, H - T), (0, 0)), mode="edge")
 
     @check_file
-    def expert(self, pidx):
+    def expert(self, pidx: int) -> np.ndarray:
+        """
+        Gets the expert's solution for a given planning problem index.
+        """
         T = self.expert_length(pidx)
         return self.file[self.key][pidx, :T]
 
     @check_file
-    def stats(self, num_trajectory_samples=None):
+    def stats(self, num_trajectory_samples: int | None = None) -> dict[str, np.ndarray]:
+        """
+        Computes statistics for the dataset.
+        """
         N = self.file[self.key].shape[0]
         if num_trajectory_samples is not None:
             indices = sorted(np.random.permutation(N)[:num_trajectory_samples])
@@ -375,17 +438,23 @@ class UnindexedKeyedData:
 
 
 class KeyedData(UnindexedKeyedData):
-    def __init__(self, key, file, mode="r"):
+    def __init__(self, key: str, file: h5py.File, mode: str = "r"):
         super().__init__(key, file, mode)
         self.guard_index()
 
     @check_file
-    def lookup_pidx(self, sidx):
+    def lookup_pidx(self, sidx: int) -> int:
+        """
+        Get the pidx for a given state index.
+        """
         pidx, _ = self.file[self.index][sidx]
         return pidx
 
     @check_file
-    def lookup_start_sidx(self, pidx):
+    def lookup_start_sidx(self, pidx: int) -> int:
+        """
+        Get the first state index for a given planning problem index.
+        """
         left, right = 0, len(self) - 1
 
         while left <= right:
@@ -406,7 +475,10 @@ class KeyedData(UnindexedKeyedData):
         return None
 
     @check_file
-    def how_far_along_expert(self, sidx):
+    def how_far_along_expert(self, sidx: int) -> float:
+        """
+        Gets the fraction of the way through the expert's solution for a given state index.
+        """
         pidx, ts = self.file[self.index][sidx]
         el = self.expert_length(pidx)
         if el <= 1:
@@ -414,7 +486,10 @@ class KeyedData(UnindexedKeyedData):
         return float(ts / (el - 1.0))
 
     @check_file
-    def state_range(self, sidx, lookahead):
+    def state_range(self, sidx: int, lookahead: int) -> np.ndarray:
+        """
+        Gets a range of states for a given state index and lookahead.
+        """
         pidx, ts = self.file[self.index][sidx]
         x = self.file[self.key][pidx, ts : ts + lookahead]
         if x.shape[0] < lookahead:
@@ -424,16 +499,25 @@ class KeyedData(UnindexedKeyedData):
 
     @check_file
     def guard_index(self):
+        """
+        Guards against the index not being found in the dataset.
+        """
         if self.index not in self.file.keys() and self.file[self.key][WELL_INDEXED]:
             raise KeyError(f"{self.index} not found in dataset")
 
     @check_file
-    def state(self, sidx):
+    def state(self, sidx: int) -> np.ndarray:
+        """
+        Gets the state for a given state index.
+        """
         pidx, ts = self.file[self.index][sidx]
         return self.file[self.key][pidx, ts]
 
     @check_file
-    def state_action(self, sidx):
+    def state_action(self, sidx: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Gets the state and delta action (difference between the current state and the next state) for a given state index.
+        """
         pidx, ts = self.file[self.index][sidx]
         xt = self.file[self.key][pidx, ts]
         if ts == self.file[self.key].shape[1] - 1:
@@ -443,7 +527,7 @@ class KeyedData(UnindexedKeyedData):
         return xt, dxt
 
     @check_file
-    def rl_info(self, sidx):
+    def rl_info(self, sidx: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """
         Returns state, action, next state, and whether run was terminated
         """
@@ -455,7 +539,10 @@ class KeyedData(UnindexedKeyedData):
         return xt, dxt, self.file[self.key][pidx, ts + 1], 0
 
     @check_file
-    def state_state(self, sidx):
+    def state_state(self, sidx: int) -> np.ndarray:
+        """
+        Gets the state and the next state for a given state index.
+        """
         pidx, ts = self.file[self.index][sidx]
         if ts == self.file[self.key].shape[1] - 1:
             xt = self.file[self.key][pidx, ts][None, :]
@@ -468,14 +555,17 @@ class KeyedData(UnindexedKeyedData):
 
 
 class Dataset:
-    def __init__(self, file_path, mode="r"):
+    def __init__(self, file_path: str | Path, mode: str = "r"):
         self.file_path = file_path
         self.file = h5py.File(str(self.file_path), mode)
         self.keys = list(self.file.keys())
         self.mode = mode
 
     @property
-    def md5_checksum(self):
+    def md5_checksum(self) -> str:
+        """
+        Computes the MD5 checksum of the dataset file -- useful to log data versions when training.
+        """
         with open(self.file_path, "rb") as f:
             file_hash = hashlib.md5()
             while chunk := f.read(8192):
@@ -487,7 +577,10 @@ class Dataset:
         return len(self.file[PERSISTENT_KEY])
 
     @check_file
-    def rebuild_index(self, key):
+    def rebuild_index(self, key: str) -> np.ndarray:
+        """
+        Rebuilds the index for a given expert name.
+        """
         N = 0
         keyed_data = UnindexedKeyedData(key, self.file, self.mode)
         for pidx in trange(len(self), desc="Counting states"):
@@ -513,12 +606,15 @@ class Dataset:
     @classmethod
     def merge(
         cls,
-        destination,
-        paths_to_merge,
-        rebuild_index=True,
-        mode="w-",
-        skip_extra_keys=False,  # Skips keys not shared by all datasets
+        destination: str,
+        paths_to_merge: list[str],
+        rebuild_index: bool = True,
+        mode: str = "w-",
+        skip_extra_keys: bool = False,  # Skips keys not shared by all datasets
     ):
+        """
+        Merges a list of datasets into a single dataset.
+        """
         assert isinstance(paths_to_merge, list)
         # First check that they all have the same keys and count total
         keys = None
@@ -578,12 +674,15 @@ class Dataset:
     @classmethod
     def merge_with_unequal_sizes(
         cls,
-        destination,
-        paths_to_merge,
-        rebuild_index=True,
-        mode="w-",
-        skip_extra_keys=False,  # Skips keys not shared by all datasets
+        destination: str,
+        paths_to_merge: list[str],
+        rebuild_index: bool = True,
+        mode: str = "w-",
+        skip_extra_keys: bool = False,  # Skips keys not shared by all datasets
     ):
+        """
+        Merges a list of datasets into a single dataset, even if they have different sizes (e.g. different max numbers of cuboids).
+        """
         assert isinstance(paths_to_merge, list)
         # First check that they all have the same keys and count total
         keys = None
@@ -672,7 +771,16 @@ class Dataset:
                     g.file[key].attrs[WELL_INDEXED] = False
 
     @check_file
-    def copy(self, path, indices, rebuild_index=True, mode="w-"):
+    def copy(
+        self,
+        path: str | Path,
+        indices: list[int] | np.ndarray,
+        rebuild_index: bool = True,
+        mode: str = "w-",
+    ):
+        """
+        Copies a subset of the dataset to a new file. Does not allow duplicates.
+        """
         assert len(indices) == len(np.unique(indices)), "Indices must be unique"
         logging.info("Sorting indices")
         indices = sorted(indices)
@@ -702,7 +810,16 @@ class Dataset:
                         g.file[key].attrs[WELL_INDEXED] = False
 
     @check_file
-    def copy_with_dupicates(self, path, indices, rebuild_index=True, mode="w-"):
+    def copy_with_dupicates(
+        self,
+        path: str | Path,
+        indices: list[int] | np.ndarray,
+        rebuild_index: bool = True,
+        mode: str = "w-",
+    ):
+        """
+        Copies a subset of the dataset to a new file, allowing duplicates.
+        """
         logging.info("Sorting indices with duplicates allowed")
         indices = sorted(indices)
 
@@ -735,7 +852,10 @@ class Dataset:
                     else:
                         g.file[key].attrs[WELL_INDEXED] = False
 
-    def add_column(self, column_name, data):
+    def add_column(self, column_name: str, data: np.ndarray):
+        """
+        Adds a new column to the dataset.
+        """
         if PERSISTENT_KEY in self.file.keys():
             assert len(data) == len(self)
         else:
@@ -754,7 +874,16 @@ class Dataset:
             new_column[sf : sf + len(chunk), ...] = data[chunk, ...]
             sf += len(chunk)
 
-    def add_expert(self, expert_name, expert_data, expert_lengths, build_index=True):
+    def add_expert(
+        self,
+        expert_name: str,
+        expert_data: np.ndarray,
+        expert_lengths: np.ndarray,
+        build_index: bool = True,
+    ):
+        """
+        Adds a new expert to the dataset and indexes.
+        """
         assert self.mode in ("w", "w-", "r+")
         expert = self.file.create_dataset(
             expert_name, expert_data.shape, expert_data.dtype
@@ -779,7 +908,10 @@ class Dataset:
         else:
             expert.attrs[WELL_INDEXED] = False
 
-    def delete_expert(self, expert_name):
+    def delete_expert(self, expert_name: str):
+        """
+        Deletes an expert from the dataset and their indexes.
+        """
         index = _index(expert_name)
         if index in self.file.keys():
             logging.info(f"Deleting index: {index}")
@@ -808,7 +940,7 @@ class Dataset:
         return self.keys
 
     @check_file
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         assert key in self.keys, f"Dataset {key} not among {list(self.keys)}"
         if WELL_INDEXED not in self.file[key].attrs:
             logging.warning(f"Must rebuild index for {key} to maintain trustworthiness")

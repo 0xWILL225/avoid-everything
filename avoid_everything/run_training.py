@@ -39,10 +39,12 @@ from avoid_everything.data_loader import DataModule
 from avoid_everything.pretraining import PretrainingMotionPolicyTransformer
 from avoid_everything.rope import ROPEMotionPolicyTransformer
 
+# Set up the project to allow imports without installing
+# Could be removed if this was refactored as a Python package
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, PROJECT_ROOT)
 
-# Make deterministic
+# Make deterministic-ish
 seed_value = 42
 torch.manual_seed(seed_value)
 random.seed(seed_value)

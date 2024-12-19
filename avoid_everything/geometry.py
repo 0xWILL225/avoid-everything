@@ -28,7 +28,7 @@ import torch
 from geometrout.primitive import Cuboid, Cylinder, Sphere
 
 
-def rotation_matrix_to_quaternion(rot_mat):
+def rotation_matrix_to_quaternion(rot_mat: torch.Tensor) -> torch.Tensor:
     """
     Convert a batch of rotation matrices to quaternions. From ChatGPT--not 100% sure its right.
 
@@ -138,7 +138,7 @@ class TorchCuboids:
             self.mask.__getitem__(*args),
         )
 
-    def geometrout(self):
+    def geometrout(self) -> list[list[Cuboid]]:
         """
         Helper method to convert this into geometrout primitives
         """
@@ -156,7 +156,7 @@ class TorchCuboids:
             for bidx in range(B)
         ]
 
-    def poses(self):
+    def poses(self) -> torch.Tensor:
         w = self.quats[:, :, 0]
         x = self.quats[:, :, 1]
         y = self.quats[:, :, 2]
@@ -194,7 +194,7 @@ class TorchCuboids:
         poses[:, :, :3, 3] = torch.clone(self.centers)
         return poses
 
-    def _init_frames(self):
+    def _init_frames(self) -> torch.Tensor:
         """
         In order to calculate the SDF, we need to calculate the inverse
         transformation of the cuboid. This is because we are transforming points
@@ -426,7 +426,7 @@ class TorchCylinders:
             self.mask.__getitem__(*args),
         )
 
-    def geometrout(self):
+    def geometrout(self) -> list[list[Cylinder]]:
         """
         Helper method to convert this into geometrout primitives
         """
@@ -445,7 +445,7 @@ class TorchCylinders:
             for bidx in range(B)
         ]
 
-    def _init_frames(self):
+    def _init_frames(self) -> torch.Tensor:
         """
         In order to calculate the SDF, we need to calculate the inverse
         transformation of the cylinder. This is because we are transforming
