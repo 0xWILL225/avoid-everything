@@ -1,19 +1,102 @@
 # Avoid Everything: Model-Free Collision Avoidance with Expert-Guided Fine-Tuning
 
-This repository contain the (currently partially complete) official implementation of the paper **"Avoid Everything: Model-Free Collision Avoidance with Expert-Guided Fine-Tuning"** presented at CoRL 2024 by Fishman et al. from the University of Washington and NVIDIA Inc.
+This repository contains the official implementation of the paper **"Avoid Everything: Model-Free Collision Avoidance with Expert-Guided Fine-Tuning"** presented at CoRL 2024 by Fishman et al.
+
+## Table of Contents
+* [Overview](#overview)
+* [Installation](#installation)
+* [Usage](#usage)
+* [Training](#training)
+  * [Pretraining](#pretraining)
+  * [ROPE Fine-tuning](#rope-fine-tuning)
+* [Data Generation](#data-generation)
+* [License](#license)
+* [Citation](#citation)
 
 ## Overview
 
 Avoid Everything introduces a novel approach to generating collision-free motion for robotic manipulators in cluttered, partially observed environments. The system combines:
 
-- **Motion Policy Transformer (MπFormer)**: A transformer architecture for joint space control using point clouds.
-- **Refining on Optimized Policy Experts (ROPE)**: A fine-tuning procedure that refines motion policies using optimization-based demonstrations.
+- **Motion Policy Transformer (MπFormer)**: A transformer architecture for joint space control using point clouds
+- **Refining on Optimized Policy Experts (ROPE)**: A fine-tuning procedure that refines motion policies using optimization-based demonstrations
 
-Key results show that Avoid Everything achieves a success rate of over 91% in challenging manipulation scenarios, significantly outperforming previous methods.
+The system achieves over 91% success rate in challenging manipulation scenarios while being significantly faster than traditional planning approaches.
 
-## Code Release
+## Installation
 
-We are currently preparing the codebase for public release, aiming to make it available by the end of November. For updates, please follow this issue: [Code Release Issue](https://github.com/fishbotics/avoid-everything/issues/1).
+Note: these installation instructions were adapted from [Motion Policy Networks](https://github.com/NVlabs/motion-policy-networks) (Fishman et al. 2022). 
+
+The easiest way to install the code here is to build our included docker container,
+which contains all of the dependencies for data generation, model training,
+inference. While it should be possible to run all of the training code in CUDA or with a Virtual Environment, we use Docker in this official implementation because it makes it easier to install the dependencies for data generation, notably [OMPL](https://ompl.kavrakilab.org/) requires a lot of system dependencies before building from source.
+
+If you have a strong need to build this repo on your host machine, you can follow the same steps as are outlined in the [Dockerfile](docker/Dockerfile).
+
+To build the docker and use this code, you can follow these steps:
+```
+First, clone this repo using:
+```
+git clone https://github.com/fishbotics/avoid-everything.git
+```
+Navigate inside the repo (e.g. `cd avoid-everything`) and build the docker with
+```
+docker build --tag avoid-everything --network=host --file docker/Dockerfile .
+```
+After this is built, you should be able to launch the docker using this command
+(be sure to use the correct paths on your system for the `/PATH/TO/THE/REPO` arg)
+```
+docker run --interactive --tty --rm --gpus all --network host --privileged --env DISPLAY=unix$DISPLAY --volume /PATH/TO/THE/REPO:/root/avoid-everything avoid-everything /bin/bash -c 'export PYTHONPATH=/root/mpinets:$PYTHONPATH; git config --global --add safe.directory /root/avoid-everything; /bin/bash'
+```
+In order to run any GUI-based code in the docker, be sure to add the correct
+user to `xhost` on the host machine. You can do this by running `xhost
++si:localuser:root` in another terminal on the host machine.
+
+Our suggested development setup would be to have two terminals open, one
+running the docker (use this one for running the code) and another editing
+code on the host machine. The `docker run` command above will mount your
+checkout of this repo into the docker, allowing you to edit the files from
+either inside the docker or on the host machine.
+
+## Usage
+
+### Pretrained Models
+We provide pretrained models for both the base MπFormer and ROPE-finetuned versions:
+- Base MπFormer checkpoint: [Link To Be Posted Later]
+- Avoid Everything checkpoint (with ROPE and DAgger): [Link To Be Posted Later]
+
+## Training
+
+### Pretraining
+The pretraining configuration can be found in `pretraining.yaml`. Key parameters include:
+- collision_loss_weight: 5
+- point_match_loss_weight: 1
+- min_lr: 1.0e-5
+- max_lr: 5.0e-5
+- warmup_steps: 5000
+
+To start pretraining, run:
+```bash
+python avoid_everything/train.py pretraining.yaml
+```
+
+
+### ROPE Fine-tuning
+ROPE fine-tuning uses the configuration in `rope.yaml`. To start fine-tuning:
+```bash
+python avoid_everything/train.py rope.yaml
+```
+
+## Data Generation
+
+The data generation pipeline supports creating both pretraining and fine-tuning datasets. Based on `avoid_everything/data_generation.py`, the system can generate:
+
+- Training trajectories in random environments
+- Test scenarios for evaluation
+- Expert demonstrations for ROPE fine-tuning
+
+## License
+
+MIT License. See LICENSE file for details.
 
 ## Citation
 
