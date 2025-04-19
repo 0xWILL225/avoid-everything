@@ -4,6 +4,7 @@ This repository contains the official implementation of the paper **"Avoid Every
 
 ## Table of Contents
 * [Overview](#overview)
+* [Data and Checkpoints](#data-and-checkpoints)
 * [Installation](#installation)
 * [Usage](#usage)
 * [Training](#training)
@@ -21,6 +22,9 @@ Avoid Everything introduces a novel approach to generating collision-free motion
 - **Refining on Optimized Policy Experts (ROPE)**: A fine-tuning procedure that refines motion policies using optimization-based demonstrations
 
 The system achieves over 91% success rate in challenging manipulation scenarios while being significantly faster than traditional planning approaches.
+
+## Data and Checkpoints
+You can find the data and checkpoints from the paper on [Zenodo](https://zenodo.org/records/15249565).
 
 ## Installation
 
