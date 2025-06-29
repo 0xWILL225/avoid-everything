@@ -101,11 +101,11 @@ class MPiFormerPointNet(nn.Module):
         super().__init__()
         # Input channels account for both `pos` and node features.
         self.sa1_module = SAModule(
-            ratio=0.25, r=0.05, nn=MLP([3 + input_feature_dim, 64, 64, 64])
+            ratio=0.25, r=0.05, net=MLP([3 + input_feature_dim, 64, 64, 64])
         )
-        self.sa2_module = SAModule(ratio=0.25, r=0.3, nn=MLP([64 + 3, 128, 128, 256]))
+        self.sa2_module = SAModule(ratio=0.25, r=0.3, net=MLP([64 + 3, 128, 128, 256]))
         self.sa3_module = SAModule(
-            ratio=0.25, r=0.5, nn=MLP([256 + 3, 256, 512, d_model])
+            ratio=0.25, r=0.5, net=MLP([256 + 3, 256, 512, d_model])
         )
         self.point_id_embedding = nn.Parameter(
             torch.randn((1, num_robot_points, input_feature_dim))
