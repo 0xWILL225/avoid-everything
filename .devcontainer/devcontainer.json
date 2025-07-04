@@ -1,0 +1,54 @@
+{
+  "name": "Avoid Everything Dev Container",
+  "dockerComposeFile": ["docker-compose.yaml"],
+  "service": "avoid-everything-dev",
+  "workspaceFolder": "/workspace",
+  
+  // Configure tool-specific properties
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.pylint",
+        "ms-python.black-formatter",
+        "ms-toolsai.jupyter",
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        "python.formatting.provider": "black"
+      }
+    }
+  },
+  
+  // Features to add to the dev container
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "installOhMyZsh": true,
+      "upgradePackages": false
+    }
+  },
+  
+  // Set environment variables
+  "remoteEnv": {
+    "PYTHONPATH": "/workspace:${PYTHONPATH}",
+    "DISPLAY": "${localEnv:DISPLAY}"
+  },
+  
+  // Use 'forwardPorts' to make a list of ports inside the container available locally.
+  "forwardPorts": [],
+  
+  // Use 'postCreateCommand' to run commands after the container is created.
+  "postCreateCommand": "git config --global --add safe.directory /workspace",
+  
+  // Configure container user
+  "remoteUser": "root",
+  
+  // Keep container running
+  "shutdownAction": "stopCompose"
+} 

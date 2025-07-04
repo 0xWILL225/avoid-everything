@@ -12,11 +12,11 @@ from avoid_everything.normalization import (
     normalize_franka_joints,
     unnormalize_franka_joints,
 )
-from avoid_everything.pretraining import PretrainingMotionPolicyNetwork
+from avoid_everything.pretraining import PretrainingMotionPolicyTransformer
 from avoid_everything.type_defs import DatasetType
 
 
-class ROPEMotionPolicyTransformer(PretrainingMotionPolicyNetwork):
+class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
     def __init__(
         self,
         num_robot_points: int,

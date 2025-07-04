@@ -9,13 +9,13 @@ from robofin.samplers import TorchFrankaCollisionSampler, TorchFrankaSampler
 from torch.optim.lr_scheduler import LambdaLR
 
 from avoid_everything.geometry import TorchCuboids, TorchCylinders
-from avoid_everything.loss import CollisionAndBCLossContainer
+from avoid_everything.loss import CollisionAndBCLossFn
 from avoid_everything.mpiformer import MotionPolicyTransformer
 from avoid_everything.normalization import unnormalize_franka_joints
 from avoid_everything.type_defs import DatasetType
 
 
-class PretrainingMotionPolicyTransformer(pl.LightningModule):
+class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
     """
     An version of the MotionPolicyNetwork model that has additional attributes
     necessary during training (or using the validation step outside of the
@@ -38,6 +38,7 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
         warmup_steps: int,
         decay_rate: float,
         pc_bounds: list[list[float]],
+        action_chunk_length: int,
     ):
         """
         Creates the network and assigns additional parameters for training
@@ -50,8 +51,8 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
         :param collision_loss_weight float: The weight assigned to the collision loss
         :rtype Self: An instance of the network
         """
-        super().__init__()
-        self.mpiformer = MotionPolicyTransformer(num_robot_points=num_robot_points)
+        super().__init__(num_robot_points=num_robot_points)
+        # self.mpiformer = MotionPolicyTransformer(num_robot_points=num_robot_points)
 
         self.num_robot_points = num_robot_points
         self.point_match_loss_weight = point_match_loss_weight
@@ -59,7 +60,7 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
         self.fk_sampler = None
         self.collision_sampler = None
         self.prismatic_joint = prismatic_joint
-        self.loss_fun = CollisionAndBCLossContainer(collision_loss_margin)
+        self.loss_fun = CollisionAndBCLossFn(collision_loss_margin)
         self.val_position_error = torchmetrics.MeanMetric()
         self.val_orientation_error = torchmetrics.MeanMetric()
         self.val_collision_rate = torchmetrics.MeanMetric()
@@ -77,6 +78,7 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
         self.pc_bounds = torch.as_tensor(pc_bounds)
         self.train_batch_size = train_batch_size
         self.corrected_step = 0
+        self.action_chunk_length = action_chunk_length
 
     def configure_optimizers(self):
         """
@@ -112,7 +114,7 @@ class PretrainingMotionPolicyTransformer(pl.LightningModule):
             return self.trainer.strategy.root_device
         return self.device
 
-    def setup(self):
+    def setup(self, stage=None):
         """
         Sets up the model by getting the device and initializing the collision and FK samplers.
         """

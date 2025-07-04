@@ -45,7 +45,7 @@ docker build --tag avoid-everything --network=host --file docker/Dockerfile .
 After this is built, you should be able to launch the docker using this command
 (be sure to use the correct paths on your system for the `/PATH/TO/THE/REPO` arg)
 ```
-docker run --interactive --tty --rm --gpus all --network host --privileged --env DISPLAY=unix$DISPLAY --volume /PATH/TO/THE/REPO:/root/avoid-everything avoid-everything /bin/bash -c 'export PYTHONPATH=/root/mpinets:$PYTHONPATH; git config --global --add safe.directory /root/avoid-everything; /bin/bash'
+docker run --interactive --tty --rm --gpus all --network host --privileged --env DISPLAY=unix$DISPLAY --volume /PATH/TO/THE/REPO:/root/avoid-everything avoid-everything /bin/bash -c 'export PYTHONPATH=/root/avoid-everything:$PYTHONPATH; git config --global --add safe.directory /root/avoid-everything; /bin/bash'
 ```
 In order to run any GUI-based code in the docker, be sure to add the correct
 user to `xhost` on the host machine. You can do this by running `xhost

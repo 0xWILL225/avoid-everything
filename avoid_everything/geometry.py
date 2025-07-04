@@ -117,7 +117,7 @@ class TorchCuboids:
         self.centers = centers
 
         # It's helpful to ensure the quaternions are normalized
-        self.quats = quaternions / torch.linalg.norm(quaternions, dim=2)[:, :, None]
+        self.quats = quaternions / torch.norm(quaternions, dim=2)[:, :, None]
 
         if inv_frames is None:
             inv_frames = self._init_frames()
@@ -234,6 +234,7 @@ class TorchCuboids:
             ],
             dim=2,
         )
+        
         Rt = torch.matmul(R, -1 * self.centers.unsqueeze(3)).squeeze(3)
 
         # Fill in the rotation matrices
@@ -241,6 +242,7 @@ class TorchCuboids:
 
         # Invert the transform by multiplying the inverse translation by the inverse rotation
         inv_frames[:, :, :3, 3] = Rt
+        
         return inv_frames
 
     def surface_area(self) -> torch.Tensor:
@@ -298,7 +300,7 @@ class TorchCuboids:
         # This is distance only for points outside the box, all points inside return zero
         # This probably needs to be fixed or else there will be a nan gradient
 
-        outside = torch.linalg.norm(
+        outside = torch.norm(
             torch.maximum(distances, torch.zeros_like(distances)), dim=-1
         )
         # This is distance for points inside the box, all others return zero
@@ -357,7 +359,7 @@ class TorchCuboids:
         # This is distance only for points outside the box, all points inside return zero
         # This probably needs to be fixed or else there will be a nan gradient
 
-        outside = torch.linalg.norm(
+        outside = torch.norm(
             torch.maximum(distances, torch.zeros_like(distances)), dim=-1
         )
         # This is distance for points inside the box, all others return zero
@@ -402,7 +404,8 @@ class TorchCylinders:
         self.centers = centers
 
         # It's helpful to ensure the quaternions are normalized
-        self.quats = quaternions / torch.linalg.norm(quaternions, dim=2)[:, :, None]
+        self.quats = quaternions / torch.norm(quaternions, dim=2)[:, :, None]
+
         if inv_frames is None:
             inv_frames = self._init_frames()
         self.inv_frames = inv_frames
@@ -451,6 +454,7 @@ class TorchCylinders:
         transformation of the cylinder. This is because we are transforming
         points in the world frame into the cylinder frame.
         """
+
         # Initialize the inverse rotation
         w = self.quats[:, :, 0]
         x = -self.quats[:, :, 1]
@@ -484,6 +488,7 @@ class TorchCylinders:
             ],
             dim=2,
         )
+        
         Rt = torch.matmul(R, -1 * self.centers.unsqueeze(3)).squeeze(3)
 
         # Fill in the rotation matrices
@@ -491,6 +496,7 @@ class TorchCylinders:
 
         # Invert the transform by multiplying the inverse translation by the inverse rotation
         inv_frames[:, :, :3, 3] = Rt
+        
         return inv_frames
 
     def surface_area(self) -> torch.Tensor:
@@ -532,7 +538,7 @@ class TorchCylinders:
         B, M, N, _ = points_proj.shape
         masked_points = points_proj[self.mask]
 
-        surface_distance_xy = torch.linalg.norm(masked_points[:, :, :2], dim=2)
+        surface_distance_xy = torch.norm(masked_points[:, :, :2], dim=2)
         z_distance = masked_points[:, :, 2]
 
         half_extents_2d = torch.stack(
@@ -542,7 +548,7 @@ class TorchCylinders:
         distances_2d = torch.abs(points_2d) - half_extents_2d
 
         # This is distance only for points outside the box, all points inside return zero
-        outside = torch.linalg.norm(
+        outside = torch.norm(
             torch.maximum(distances_2d, torch.zeros_like(distances_2d)), dim=2
         )
         # This is distance for points inside the box, all others return zero
@@ -593,7 +599,7 @@ class TorchCylinders:
         assert N == points.size(2)
         masked_points = points_proj[self.mask]
 
-        surface_distance_xy = torch.linalg.norm(masked_points[:, :, :, :2], dim=-1)
+        surface_distance_xy = torch.norm(masked_points[:, :, :, :2], dim=-1)
         z_distance = masked_points[:, :, :, 2]
 
         half_extents_2d = torch.stack(
@@ -603,7 +609,7 @@ class TorchCylinders:
         distances_2d = torch.abs(points_2d) - half_extents_2d
 
         # This is distance only for points outside the box, all points inside return zero
-        outside = torch.linalg.norm(
+        outside = torch.norm(
             torch.maximum(distances_2d, torch.zeros_like(distances_2d)), dim=3
         )
         # This is distance for points inside the box, all others return zero

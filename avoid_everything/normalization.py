@@ -186,9 +186,14 @@ def _unnormalize_franka_joints_torch(
     for _ in range(batch_trajectory.ndim - 1):
         franka_limit_range = franka_limit_range.unsqueeze(0)
         franka_lower_limit = franka_lower_limit.unsqueeze(0)
-    return (batch_trajectory - limits[0]) * franka_limit_range / (
-        limits[1] - limits[0]
-    ) + franka_lower_limit
+    
+    # Avoid division by zero in normalization
+    limits_range = limits[1] - limits[0]
+    if limits_range == 0:
+        limits_range = 1e-8
+        
+    result = (batch_trajectory - limits[0]) * franka_limit_range / limits_range + franka_lower_limit
+    return result
 
 
 def unnormalize_franka_joints(

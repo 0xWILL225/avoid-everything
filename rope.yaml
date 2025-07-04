@@ -32,9 +32,9 @@ training_model_parameters:
   hard_negative_ratio: 0.2
   train_batch_size: 10
 data_module_parameters:
-  data_dir: DATA_PATH
-  train_trajectory_key: "global_solutions" # Could also use 'global_solutions' for the global expert
-  val_trajectory_key: "global_solutions" # Could also use 'global_solutions' for the global expert
+  data_dir: /workspace/datasets/mpinets_global_training_data
+  train_trajectory_key: "robot_configurations" # Training dataset uses this key
+  val_trajectory_key: "global_solutions" # Validation dataset uses this key
   num_obstacle_points: 4096
   num_target_points: 128
   random_scale: 0.015
@@ -45,14 +45,17 @@ shared_parameters:
   action_chunk_length: 1
 num_workers: 10
 checkpoint_interval: 60
-val_every_n_minutes: 60
+val_every_n_epochs: 1
 gpus: 1 # If > 1, will use DDP for training.
 train_batch_size: 10
 val_batch_size: 10
 max_epochs: 100
 use_simple_model: false
 stop_early: false
-save_checkpoint_dir: /gscratch/rselab/afishman/mpinets_checkpoints
+mintest: false
+no_logging: false
+save_checkpoint_dir: /workspace/checkpoints
 load_checkpoint_path: PATH/TO/PRETRAINING/CHECKPOINT
 experiment_name: ROPEFineTuning
 description: "Put in a description for the ROPE experiment"
+

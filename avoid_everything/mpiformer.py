@@ -62,7 +62,13 @@ class PositionEncoding3D(nn.Module):
     def forward(self, pos, bounds):
         pos_min = bounds[0]
         pos_max = bounds[1]
-        pos = ((pos - pos_min) / (pos_max - pos_min) - 0.5) * 2 * np.pi
+        
+        # Avoid division by zero in position encoding
+        pos_range = pos_max - pos_min
+        if torch.any(pos_range == 0):
+            pos_range = torch.clamp(pos_range, min=1e-8)
+            
+        pos = ((pos - pos_min) / pos_range - 0.5) * 2 * np.pi
         dim_t = torch.arange(self.freq, dtype=torch.float32, device=pos.device)
         dim_t = self.temperature ** (dim_t / self.freq)
         pos = pos[..., None] * self.scale / dim_t  # (B, N, 3, F)
@@ -101,11 +107,11 @@ class MPiFormerPointNet(nn.Module):
         super().__init__()
         # Input channels account for both `pos` and node features.
         self.sa1_module = SAModule(
-            ratio=0.25, r=0.05, nn=MLP([3 + input_feature_dim, 64, 64, 64])
+            ratio=0.25, r=0.05, net=MLP([3 + input_feature_dim, 64, 64, 64])
         )
-        self.sa2_module = SAModule(ratio=0.25, r=0.3, nn=MLP([64 + 3, 128, 128, 256]))
+        self.sa2_module = SAModule(ratio=0.25, r=0.3, net=MLP([64 + 3, 128, 128, 256]))
         self.sa3_module = SAModule(
-            ratio=0.25, r=0.5, nn=MLP([256 + 3, 256, 512, d_model])
+            ratio=0.25, r=0.5, net=MLP([256 + 3, 256, 512, d_model])
         )
         self.point_id_embedding = nn.Parameter(
             torch.randn((1, num_robot_points, input_feature_dim))
@@ -151,7 +157,7 @@ class MPiFormerPointNet(nn.Module):
         return x, pos
 
 
-class MotionPolicyTransformer(nn.Module):
+class MotionPolicyTransformer(pl.LightningModule):
     """
     The MPiFormer architecture described by Fishman, et al.
 
@@ -202,7 +208,6 @@ class MotionPolicyTransformer(nn.Module):
 
     def forward(
         self,
-        *,
         point_cloud_labels: torch.Tensor,
         point_cloud: torch.Tensor,
         q: torch.Tensor,

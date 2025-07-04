@@ -27,13 +27,16 @@ import random
 import sys
 import uuid
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+import psutil
+import gc
 
 import lightning.pytorch as pl
 import numpy as np
 import torch
 import yaml
 from lightning.pytorch.callbacks import ModelCheckpoint, StochasticWeightAveraging
+from lightning.pytorch.loggers import WandbLogger
 
 from avoid_everything.data_loader import DataModule
 from avoid_everything.pretraining import PretrainingMotionPolicyTransformer
@@ -52,10 +55,29 @@ np.random.seed(seed_value)
 torch.set_float32_matmul_precision("high")
 
 
+def log_memory_usage(stage: str):
+    """Log current memory usage for debugging"""
+    if torch.cuda.is_available():
+        gpu_memory = torch.cuda.memory_allocated() / 1024**3  # GB
+        gpu_reserved = torch.cuda.memory_reserved() / 1024**3  # GB
+    else:
+        gpu_memory = gpu_reserved = 0
+    
+    cpu_memory = psutil.virtual_memory().used / 1024**3  # GB
+    cpu_percent = psutil.virtual_memory().percent
+    
+    pl.utilities.rank_zero_info(
+        f"[{stage}] Memory usage - "
+        f"CPU: {cpu_memory:.1f}GB ({cpu_percent:.1f}%), "
+        f"GPU: {gpu_memory:.1f}GB allocated, {gpu_reserved:.1f}GB reserved"
+    )
+
+
 def setup_trainer(
     val_every_n_batches: int | None,
     val_every_n_epochs: int | None,
     max_epochs: int,
+    logger: Optional[WandbLogger],
 ) -> pl.Trainer:
     args: Dict[str, Any] = {}
 
@@ -67,7 +89,11 @@ def setup_trainer(
         assert val_every_n_epochs is not None
         args = {**args, "check_val_every_n_epoch": val_every_n_epochs}
 
-    experiment_id = str(uuid.uuid1())
+    if logger is not None:
+        experiment_id = str(logger.experiment.id)
+    else:
+        experiment_id = str(uuid.uuid1())
+        
     dirpath = Path(PROJECT_ROOT) / "checkpoints" / experiment_id
     logging.info(f"Checkpoint will be saved in {dirpath}")
     trainer = pl.Trainer(
@@ -76,21 +102,46 @@ def setup_trainer(
             StochasticWeightAveraging(swa_lrs=1e-2),
             ModelCheckpoint(
                 monitor="avg_val_collision_rate",
+                mode="min",  # Save model with LOWEST collision rate
                 save_last=False,
                 auto_insert_metric_name=True,
                 save_on_train_epoch_end=False,
                 dirpath=dirpath,
-                filename="bestval-{epoch}-{step}-{avg_val_collision_rate:.4f}",
+                filename="best_collision-{epoch}-{step}-{avg_val_collision_rate:.4f}",
+            ),
+            ModelCheckpoint(
+                monitor="avg_val_target_error",
+                mode="min",  # Save model with LOWEST target error
+                save_last=False,
+                auto_insert_metric_name=True,
+                save_on_train_epoch_end=False,
+                dirpath=dirpath,
+                filename="best_target-{epoch}-{step}-{avg_val_target_error:.4f}",
             ),
         ],
         max_epochs=max_epochs,
         gradient_clip_val=1.0,
+        detect_anomaly=True,
         accelerator="gpu",
         devices=1,
+        logger=False if logger is None else logger,
         **args,
     )
     return trainer
 
+def setup_logger(
+    should_log: bool, experiment_name: str, config_values: Dict[str, Any]
+) -> Optional[WandbLogger]:
+    if not should_log:
+        pl.utilities.rank_zero_info("Disabling all logs")
+        return None
+    logger = WandbLogger(
+        name=experiment_name,
+        project="avoid-everything",
+        log_model=True,
+    )
+    logger.log_hyperparams(config_values)
+    return logger
 
 def parse_args_and_configuration():
     """
@@ -116,13 +167,22 @@ def run():
     Runs the training procedure
     """
     config = parse_args_and_configuration()
-
     pl.utilities.rank_zero_info(f"Experiment name: {config['experiment_name']}")
+    log_memory_usage("Start")
+    
+    logger = setup_logger(
+        not config["no_logging"],
+        config["experiment_name"],
+        config,
+    )
     trainer = setup_trainer(
         val_every_n_batches=config.get("val_every_n_batches", None),
         val_every_n_epochs=config.get("val_every_n_epochs", None),
         max_epochs=100,
+        logger=logger,
     )
+
+    log_memory_usage("After trainer setup")
 
     dm = DataModule(
         train_batch_size=10 if config["mintest"] else config["train_batch_size"],
@@ -133,6 +193,8 @@ def run():
         **(config["shared_parameters"] or {}),
         **(config["data_module_parameters"] or {}),
     )
+    
+    log_memory_usage("After data module creation")
     if "rope" in config and config["rope"]:
         mdl_class = ROPEMotionPolicyTransformer
     else:
@@ -152,6 +214,18 @@ def run():
             **(config["training_model_parameters"] or {}),
         )
 
+    log_memory_usage("After model creation")
+
+    if logger is not None:
+        logger.watch(mdl, log="gradients", log_freq=100)
+        
+    # Clear any cached memory before training
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        
+    log_memory_usage("Before training start")
+    
     if "resume_training" in config:
         pl.utilities.rank_zero_info(
             f"Continuing from checkpoint: {config['resume_training']['checkpoint_path']}"
@@ -163,6 +237,8 @@ def run():
         )
     else:
         trainer.fit(model=mdl, datamodule=dm)
+
+    
 
 
 if __name__ == "__main__":

@@ -29,28 +29,34 @@ training_model_parameters:
   warmup_steps: 5000
   decay_rate: null # 0.999
   pc_bounds: [[-1.5, -1.5, -0.1], [1.5, 1.5, 1.5]]
-  hard_negative_ratio: null
   train_batch_size: 10
+  disable_viz: true
+
 data_module_parameters:
-  data_dir: DATA_PATH
-  train_trajectory_key: "global_solutions" # Could also use 'global_solutions' for the global expert
-  val_trajectory_key: "global_solutions" # Could also use 'global_solutions' for the global expert
+  data_dir: /workspace/datasets/mpinets_global_training_data/global_dataset_6540000
+  train_trajectory_key: "robot_configurations" # Training dataset uses this key
+  val_trajectory_key: "global_solutions" # Validation dataset uses this key
   num_obstacle_points: 4096
   random_scale: 0.015
+  ignore_pretrain_data: false
+  num_target_points: 128
+
 shared_parameters:
   prismatic_joint: 0.04
   num_robot_points: 2048
-  num_target_points: 128
   action_chunk_length: 1
-num_workers: 10
+
+num_workers: 6
 checkpoint_interval: 60
-val_every_n_minutes: 120
+val_every_n_epochs: 1
 gpus: 1
 train_batch_size: 10
 val_batch_size: 10
 max_epochs: 100
 use_simple_model: false
 stop_early: false
-save_checkpoint_dir: /mpinets_checkpoints
-experiment_name: PretrainingExperiment
-description: "Put in a description here to keep track of experiments"
+mintest: false
+no_logging: false
+save_checkpoint_dir: /workspace/checkpoints
+experiment_name: "Cretin: Avoid Everything test"
+description: "Avoid Everything test run"
