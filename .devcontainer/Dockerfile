@@ -58,11 +58,8 @@ RUN wget https://github.com/Kitware/CMake/releases/download/v3.24.1/cmake-3.24.1
   && rm /tmp/cmake-install.sh \
   && ln -s /opt/cmake-3.24.1/bin/* /usr/local/bin
 
-### Original install, does not work
-# RUN wget https://ompl.kavrakilab.org/install-ompl-ubuntu.sh \
-#   && chmod u+x install-ompl-ubuntu.sh \
-#   && ./install-ompl-ubuntu.sh --github --python
 
+### Install specific version of OMPL, with python bindings
 ENV OMPL_VERSION=1.6.0
 RUN apt-get update \
     && apt-get install -y g++ pkg-config libboost-serialization-dev libboost-filesystem-dev libboost-system-dev libboost-program-options-dev libboost-test-dev libeigen3-dev libode-dev wget libyaml-cpp-dev \ 
@@ -90,5 +87,5 @@ RUN pip install --upgrade pip \
   && pip install git+https://github.com/fishbotics/atob.git \
   && pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.1.2+cu121.html
 
-# Use local fixed robofin instead of pip version (fixes mesh loading bug)
-ENV PYTHONPATH="/workspace/libs/robofin:${PYTHONPATH}"
+# Use submodule robofin instead of pip version
+ENV PYTHONPATH="/workspace/robofin:${PYTHONPATH}"
