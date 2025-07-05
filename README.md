@@ -36,31 +36,24 @@ If you have a strong need to build this repo on your host machine, you can follo
 
 To build the docker and use this code, you can follow these steps:
 
-```
+
 First, clone this repo using:
 ```
-
 git clone https://github.com/fishbotics/avoid-everything.git
 
 ```
 Navigate inside the repo (e.g. `cd avoid-everything`) and build the docker with
-```
 
+```
 docker build --tag avoid-everything --network=host --file docker/Dockerfile .
 
 ```
 After this is built, you should be able to launch the docker using this command
 (be sure to use the correct paths on your system for the `/PATH/TO/THE/REPO` arg)
+
 ```
-<<<<<<< HEAD
 docker run --interactive --tty --rm --gpus all --network host --privileged --env DISPLAY=unix$DISPLAY --volume /PATH/TO/THE/REPO:/root/avoid-everything avoid-everything /bin/bash -c 'export PYTHONPATH=/root/avoid-everything:$PYTHONPATH; git config --global --add safe.directory /root/avoid-everything; /bin/bash'
 ```
-=======
-
-docker run --interactive --tty --rm --gpus all --network host --privileged --env DISPLAY=unix$DISPLAY --volume /PATH/TO/THE/REPO:/root/avoid-everything avoid-everything /bin/bash -c 'export PYTHONPATH=/root/mpinets:$PYTHONPATH; git config --global --add safe.directory /root/avoid-everything; /bin/bash'
-
-````
->>>>>>> origin/main
 In order to run any GUI-based code in the docker, be sure to add the correct
 user to `xhost` on the host machine. You can do this by running `xhost
 +si:localuser:root` in another terminal on the host machine.

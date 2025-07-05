@@ -8,7 +8,7 @@ RUN dpkg --add-architecture i386 && \
         libx11-6 libx11-6:i386 && \
     rm -rf /var/lib/apt/lists/*
 
-# nvidia-container-runtime
+### Setup nvidia-container-runtime
 ENV NVIDIA_VISIBLE_DEVICES \
         ${NVIDIA_VISIBLE_DEVICES:-all}
 ENV NVIDIA_DRIVER_CAPABILITIES \
@@ -18,6 +18,20 @@ RUN echo "/usr/local/nvidia/lib" >> /etc/ld.so.conf.d/nvidia.conf && \
     echo "/usr/local/nvidia/lib64" >> /etc/ld.so.conf.d/nvidia.conf
 
 COPY .devcontainer/NGC-DL-CONTAINER-LICENSE /
+
+### Install ROS2 Humble
+RUN apt-get update && apt-get install -y software-properties-common \
+    && apt-add-repository universe \
+    && apt-get update && apt-get install -y curl \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y ros-humble-desktop \
+    && apt-get install -y python3-colcon-common-extensions python3-rosdep \
+    && rosdep init \
+    && rosdep update \
+    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ros-humble-joint-state-publisher-gui
 
 # Required for non-glvnd setups.
 ENV LD_LIBRARY_PATH /usr/lib/x86_64-linux-gnu:/usr/lib/i386-linux-gnu${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
@@ -31,7 +45,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 COPY .devcontainer/10_nvidia.json /usr/share/glvnd/egl_vendor.d/10_nvidia.json
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         libglvnd-dev libglvnd-dev:i386 \
@@ -48,15 +61,6 @@ RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selectio
     neovim nano software-properties-common python3-pip python3-dev python3-tk \
     freeglut3-dev \
   && apt-get clean && rm -rf /var/lib/apt
-
-### Installing CMake
-RUN wget https://github.com/Kitware/CMake/releases/download/v3.24.1/cmake-3.24.1-Linux-x86_64.sh \
-  -q -O /tmp/cmake-install.sh \
-  && chmod u+x /tmp/cmake-install.sh \
-  && mkdir /opt/cmake-3.24.1 \
-  && /tmp/cmake-install.sh --skip-license --prefix=/opt/cmake-3.24.1 \
-  && rm /tmp/cmake-install.sh \
-  && ln -s /opt/cmake-3.24.1/bin/* /usr/local/bin
 
 
 ### Install specific version of OMPL, with python bindings
@@ -75,17 +79,46 @@ RUN wget https://github.com/ompl/ompl/archive/refs/tags/$OMPL_VERSION.tar.gz \
     && make update_bindings \
     && make install
 
-RUN pip install --upgrade pip \
-  && pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu121 \
-  && pip install \
-    numpy==1.24.4 ipython lightning==2.0.0 h5py wandb pybullet GitPython ikfast-pybind geometrout==0.1.3 torchmetrics matplotlib \
-    tqdm urchin termcolor meshcat moviepy imageio splendor-render pyopengl slack_sdk yourdfpy ipdb torch_geometric \
-  && yes | splendor_asset_installer \
-  # Necessary because of version incompatibilities
-  && pip install --upgrade fastapi \
-  && pip install numba \
-  && pip install git+https://github.com/fishbotics/atob.git \
-  && pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.1.2+cu121.html
 
-# Use submodule robofin instead of pip version
-ENV PYTHONPATH="/workspace/robofin:${PYTHONPATH}"
+### Install Foxglove Studio
+RUN curl -L -o /tmp/foxglove.deb https://get.foxglove.dev/desktop/latest/foxglove-studio-latest-linux-amd64.deb \
+  && apt-get update && \
+  apt-get install -y /tmp/foxglove.deb && \
+  rm /tmp/foxglove.deb
+RUN apt-get update && apt-get install -y ros-humble-foxglove-bridge
+
+### Build Foam (collision sphere generation)
+RUN git config --global url."https://github.com/".insteadOf git@github.com: \
+    && git clone --recursive https://github.com/CoMMALab/foam.git /opt/foam
+WORKDIR /opt/foam
+RUN cmake -Bbuild -GNinja .
+RUN cmake --build build
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -e .
+
+### Install Python dependencies (overwriting those from Foam)
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --upgrade pip \
+  && pip install --no-cache-dir --upgrade -r /tmp/requirements.txt \
+       -f https://data.pyg.org/whl/torch-2.1.2+cu121.html \
+  && yes | splendor_asset_installer
+
+### Add user
+ARG USERNAME=USERNAME
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
+
+RUN groupadd --gid $USER_GID $USERNAME \
+    && useradd --uid $USER_UID --gid $USER_GID -m -s /bin/bash $USERNAME \
+    && apt-get update \
+    && apt-get install -y sudo \
+    && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
+    && chmod 0440 /etc/sudoers.d/$USERNAME
+
+ENV SHELL /bin/bash
+USER $USERNAME
+RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+RUN printf '# Include system wide settings which are ignored\n# by default if one has its own .inputrc\n$include /etc/inputrc\n\n# Matlab like Bash history\n"\\e[B": history-search-forward\n"\\e[A": history-search-backward\n' > ~/.inputrc && \
+    echo -e '\n# Activate inputrc (matlab-like command history)\nexport INPUTRC=~/.inputrc' >> ~/.bashrc
+
+WORKDIR /workspace

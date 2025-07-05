@@ -24,12 +24,12 @@
     }
   },
   
-  // Features to add to the dev container
+  // Add features to the dev container
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/common-utils:2": {
-      "installZsh": true,
-      "installOhMyZsh": true,
+      "installZsh": false,
+      "installOhMyZsh": false,
       "upgradePackages": false
     }
   },
@@ -40,14 +40,8 @@
     "DISPLAY": "${localEnv:DISPLAY}"
   },
   
-  // Use 'forwardPorts' to make a list of ports inside the container available locally.
-  "forwardPorts": [],
-  
-  // Use 'postCreateCommand' to run commands after the container is created.
-  "postCreateCommand": "git config --global --add safe.directory /workspace",
-  
-  // Configure container user
-  "remoteUser": "root",
+  // Set git safe directory and install robofin
+  "postCreateCommand": "git config --global --add safe.directory /workspace && pip install -e /workspace/robofin",
   
   // Keep container running
   "shutdownAction": "stopCompose"

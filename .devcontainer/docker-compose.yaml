@@ -5,6 +5,8 @@ services:
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
+      args:
+        USERNAME: fishbotics
     image: avoid-everything:latest
     
     # GPU access (equivalent to --gpus all)
@@ -25,6 +27,7 @@ services:
       - DISPLAY=${DISPLAY}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility
+      - NCCL_DEBUG=WARN
       - PYTHONPATH=/workspace
     
     # Volume mounts

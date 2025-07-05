@@ -2,3 +2,6 @@
 datasets/*
 lightning_logs/*
 wandb/*
+assets/*
+checkpoints/*
+sphere_database.json
