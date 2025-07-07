@@ -2,7 +2,7 @@ from typing import Tuple, Union
 
 import numpy as np
 import torch
-from robofin.robot_constants import FrankaConstants, RealFrankaConstants
+from robofin.robofin.robot_constants import FrankaConstants, RealFrankaConstants
 
 
 def _normalize_franka_joints_numpy(

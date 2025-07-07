@@ -3,10 +3,14 @@
 # Spherify collision meshes and convert all relative visual mesh/image filenames 
 # in the URDF to absolute `file://` URLs.
 # Usage:
-#   ./prep_urdf.bash my_robot.urdf
+#   source prep_urdf.bash my_robot.urdf
 #
 # Result:
-#   prepared_my_robot.urdf  (in the same directory)
+#   my_robot_prepared.urdf  (in the same directory)
+# 
+# Environment variables set:
+#   ROBOT_DESCRIPTION: the original URDF with absolute paths
+#   SPHERIZED_ROBOT_DESCRIPTION: the URDF with sphereified collision meshes and absolute paths
 
 set -eu
 
@@ -57,7 +61,8 @@ rewrite_mesh_paths() {
 }
 
 # Spherify collision meshes of the robot
-python3 /opt/foam/scripts/generate_sphere_urdf.py $INPUT --output $TEMP_OUTPUT
+python3 /opt/foam/scripts/generate_sphere_urdf.py $INPUT --output $TEMP_OUTPUT --sphere-database $URDF_DIR/sphere_database.json
+
 
 # Absolutify paths in the URDF
 rewrite_mesh_paths "$INPUT" "$ABSOLUTIFIED_OUTPUT" "$URDF_DIR"

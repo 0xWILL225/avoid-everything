@@ -96,6 +96,40 @@ RUN cmake --build build
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir -e .
 
+### Install Blender (Desktop GUI + Python module)
+# Install Blender 4.2.0 LTS desktop application with GUI
+ENV BLENDER_VERSION=4.2.0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and install specific Blender 4.2.0 LTS version
+RUN wget -q -O /tmp/blender.tar.xz \
+    "https://download.blender.org/release/Blender4.2/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
+    && tar -xf /tmp/blender.tar.xz -C /opt/ \
+    && mv /opt/blender-${BLENDER_VERSION}-linux-x64 /opt/blender \
+    && ln -s /opt/blender/blender /usr/local/bin/blender \
+    && rm /tmp/blender.tar.xz
+
+# Note: bpy (Blender as Python module) version 4.0.0 is installed via requirements.txt 
+# (latest available on PyPI, compatible with desktop Blender 4.2 LTS installation)
+
+# Install additional dependencies for Blender Python scripting and GUI
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     libxi6 \
+#     libxrandr2 \
+#     libxxf86vm1 \
+#     libxfixes3 \
+#     libxcursor1 \
+#     libxinerama1 \
+#     libxss1 \
+#     libgconf-2-4 \
+#     libasound2 \
+#     libgl1-mesa-glx \
+#     libglu1-mesa \
+#     && rm -rf /var/lib/apt/lists/*
+
 ### Install Python dependencies (overwriting those from Foam)
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --upgrade pip \
@@ -115,10 +149,18 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
+
 ENV SHELL /bin/bash
+ENV GIT_EDITOR=vim
 USER $USERNAME
 RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+
+# MATLAB-like Bash history
 RUN printf '# Include system wide settings which are ignored\n# by default if one has its own .inputrc\n$include /etc/inputrc\n\n# Matlab like Bash history\n"\\e[B": history-search-forward\n"\\e[A": history-search-backward\n' > ~/.inputrc && \
     echo -e '\n# Activate inputrc (matlab-like command history)\nexport INPUTRC=~/.inputrc' >> ~/.bashrc
 
 WORKDIR /workspace
+
+# Set Blender startup file (start in scripting mode)
+RUN mkdir -p /home/$USERNAME/.config/blender/4.2/config
+COPY .devcontainer/blender_config/startup.blend /home/$USERNAME/.config/blender/4.2/config/startup.blend

@@ -27,6 +27,7 @@ ipdb==0.13.13
 torch-geometric==2.6.1
 fastapi==0.115.12
 numba==0.61.2
+bpy==4.0.0
 atob @ git+https://github.com/fishbotics/atob.git@fa15a01c66a2e825813cbac5fe0523d9b12d0203
 pyg-lib==0.4.0+pt21cu121
 torch-scatter==2.1.2+pt21cu121

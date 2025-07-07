@@ -25,10 +25,10 @@ from typing import List, Optional, Union
 import numpy as np
 from geometrout.primitive import Cuboid, CuboidArray, Cylinder, CylinderArray
 from geometrout.transform import SE3, SO3
-from robofin.collision import FrankaCollisionSpheres
-from robofin.kinematics.numba import franka_arm_link_fk
-from robofin.robot_constants import RealFrankaConstants
-from robofin.robots import FrankaRealRobot
+from robofin.robofin.collision import FrankaCollisionSpheres
+from robofin.robofin.kinematics.numba import franka_arm_link_fk
+from robofin.robofin.robot_constants import RealFrankaConstants
+from robofin.robofin.robots import FrankaRealRobot
 
 from avoid_everything.environments.base import (
     Environment,
