@@ -6,30 +6,73 @@ from pathlib import Path
 import subprocess
 
 
-
-def print_all_sphere_info(prefix="Sphere_"):
-  """Prints the location and radius of all mesh objects with the given name prefix."""
-  for obj in bpy.data.objects:
-    if obj.type == 'MESH' and obj.name.startswith(prefix):
-      loc = obj.location
-      radius = obj.dimensions.x / 2 # assumes uniform scaling
-      print(f"Sphere '{obj.name}': Location = ({loc.x:.3f}, {loc.y:.3f}, {loc.z:.3f}), Radius = {radius:.3f} m")
-
-
-def print_sphere_info(obj):
-  if obj.type != 'MESH':
-    print(f"{obj.name} is not a mesh object.")
-    return
-  loc = obj.location
-  radius = obj.dimensions.x / 2 # assumes uniform scale and sphere
-  print(f"Sphere '{obj.name}': Location = ({loc.x:.3f}, {loc.y:.3f}, {loc.z:.3f}), Radius = {radius:.3f} m")
-
-
-def add_sphere(x, y, z, radius, name_prefix="Sphere_", index=None):
-  """Adds a green, opaque sphere to the scene."""
+def add_sphere(x, y, z, radius, index=None):
+  """
+  Adds a green, opaque sphere to the scene.
+  
+  Automatically detects the current editing context (link and sphere type) 
+  from existing collections and names the sphere appropriately.
+  Falls back to manual naming if no context is found.
+  """
+  # Try to detect current editing context from existing collections
+  link_name = None
+  sphere_type = None
+  sphere_collection = None
+  
+  # Look for sphere collections to determine context
+  for collection in bpy.data.collections:
+    if collection.name.endswith('_collision_spheres'):
+      link_name = collection.name[:-len('_collision_spheres')]
+      sphere_type = 'collision'
+      sphere_collection = collection
+      break
+    elif collection.name.endswith('_self_collision_spheres'):
+      link_name = collection.name[:-len('_self_collision_spheres')]
+      sphere_type = 'self_collision'
+      sphere_collection = collection
+      break
+  
+  # Create the sphere
   bpy.ops.mesh.primitive_uv_sphere_add(radius=radius, location=(x, y, z))
   obj = bpy.context.active_object
-  obj.name = f"{name_prefix}{index}" if index is not None else name_prefix
+  
+  # Name the sphere based on context
+  if link_name and sphere_type:
+    # Find the next available index for this link/type
+    sphere_prefix = f"{link_name}_{sphere_type}_"
+    existing_indices = []
+    
+    for existing_obj in bpy.data.objects:
+      if existing_obj.name.startswith(sphere_prefix):
+        # Extract index from name like "panda_link1_collision_0"
+        try:
+          index_str = existing_obj.name[len(sphere_prefix):]
+          # Handle names with description like "panda_link1_collision_0_manual"
+          if '_' in index_str:
+            index_str = index_str.split('_')[0]
+          existing_index = int(index_str)
+          existing_indices.append(existing_index)
+        except ValueError:
+          continue
+    
+    # Get next available index
+    next_index = max(existing_indices, default=-1) + 1
+    obj.name = f"{sphere_prefix}{next_index}"
+    
+    # Move to sphere collection
+    if move_object_to_collection(obj, sphere_collection):
+      print(f"SUCCESS: Added sphere {obj.name} at ({x:.3f}, {y:.3f}, {z:.3f}), r={radius:.3f}")
+      print(f"  Auto-detected context: {link_name} {sphere_type}")
+    else:
+      print(f"WARNING: Added sphere {obj.name} but failed to move to collection properly")
+      print(f"  Position: ({x:.3f}, {y:.3f}, {z:.3f}), r={radius:.3f}")
+  else:
+    # Fall back to manual naming
+    name_prefix="sphere_"
+    obj.name = f"{name_prefix}{index}" if index is not None else name_prefix
+    print(f"WARNING: No link context detected - using manual naming: {obj.name}")
+    print(f"  Use load_link_for_editing() first to set proper context")
+    print(f"  To store spheres, the correct naming scheme must be {link_name}_{sphere_type}_{index}")
 
   # Add green material
   mat = bpy.data.materials.new(name="GreenMaterial")
@@ -152,62 +195,87 @@ def analyze_robot_spheres(urdf_path):
   }
 
 
-def generate_initial_spheres(urdf_path):
+def generate_initial_spheres(urdf_path, mesh_type="collision", 
+                           depth=1, branch=8, method="medial", 
+                           threads=16, shrinkage=1.0,
+                           use_volume_heuristic=True, volume_heuristic_ratio=0.7,
+                           **foam_kwargs):
   """
-  Step 4: Generate initial spheres using foam for all visual meshes in the URDF.
-  """
-  print(f"\n=== GENERATING INITIAL SPHERES ===")
+  Step 4: Generate initial spheres using foam for meshes in the URDF.
+  Uses the same approach as generate_sphere_urdf.py for consistent results.
   
-  # Parse URDF to get mesh files
-  try:
-    links = parse_urdf(urdf_path)
-  except Exception as e:
-    print(f"ERROR: Error parsing URDF: {e}")
+  Args:
+    urdf_path: Path to the URDF file
+    mesh_type: Type of mesh to use - "visual" (detailed) or "collision" (simplified)
+    depth: Foam depth parameter
+    branch: Base branch parameter (will be adjusted per mesh using volume heuristic)
+    method: Spherization method ("medial", etc.)
+    threads: Number of threads for processing
+    shrinkage: Scale factor for meshes
+    use_volume_heuristic: Whether to use volume-based branch adjustment
+    volume_heuristic_ratio: Ratio for volume heuristic calculation
+    **foam_kwargs: Additional foam parameters (testerLevels, numCover, etc.)
+  """
+  print(f"\n=== GENERATING INITIAL SPHERES (using {mesh_type} meshes) ===")
+  
+  if mesh_type not in ["visual", "collision"]:
+    print(f"ERROR: mesh_type must be 'visual' or 'collision', got '{mesh_type}'")
     return False
   
-  urdf_dir = Path(urdf_path).parent
-  collision_spheres = {}
-  self_collision_spheres = {}
+  # Use the wrapper script to avoid Python version compatibility issues
+  wrapper_script = Path(__file__).parent / "generate_spheres_wrapper.py"
   
-  # Process each link with a visual mesh
-  for link_name, link_info in links.items():
-    if link_info['visual_mesh']:
-      mesh_path = urdf_dir / link_info['visual_mesh']
+  # Build command arguments
+  cmd_args = [
+    'python3', str(wrapper_script), str(urdf_path),
+    '--mesh-type', mesh_type,
+    '--depth', str(depth),
+    '--branch', str(branch),
+    '--method', method,
+    '--threads', str(threads),
+    '--shrinkage', str(shrinkage),
+    '--volume-heuristic-ratio', str(volume_heuristic_ratio)
+  ]
+  
+  if not use_volume_heuristic:
+    cmd_args.append('--no-volume-heuristic')
+  
+  print(f"Running foam wrapper: {' '.join(cmd_args)}")
+  
+  try:
+    # Run the wrapper script
+    result = subprocess.run(cmd_args, capture_output=True, text=True, timeout=300)
+    
+    if result.returncode != 0:
+      print(f"ERROR: Foam wrapper failed with return code {result.returncode}")
+      print(f"STDERR: {result.stderr}")
+      return False
+    
+    # Parse JSON output
+    try:
+      sphere_results = json.loads(result.stdout)
+      collision_spheres = sphere_results.get('collision_spheres', {})
+      self_collision_spheres = sphere_results.get('self_collision_spheres', {})
       
-      if mesh_path.exists():
-        print(f"Generating spheres for {link_name}: {mesh_path}")
-        
-        try:
-          # Run foam sphere generation
-          result = subprocess.run([
-            'python3', '/opt/foam/scripts/generate_spheres.py',
-            str(mesh_path)
-          ], capture_output=True, text=True, timeout=30)
-          
-          if result.returncode == 0:
-            # Parse foam output to extract sphere data
-            # This is a placeholder - you'd need to adapt based on foam's actual output
-            spheres = parse_foam_output(result.stdout)
-            collision_spheres[link_name] = spheres
-            self_collision_spheres[link_name] = spheres # Same for now
-            print(f" SUCCESS: Generated {len(spheres)} spheres")
-          else:
-            print(f" ERROR: Foam failed: {result.stderr}")
-            # Generate fallback sphere
-            collision_spheres[link_name] = [{"origin": [0.0, 0.0, 0.0], "radius": 0.05}]
-            self_collision_spheres[link_name] = [{"origin": [0.0, 0.0, 0.0], "radius": 0.05}]
-            
-        except Exception as e:
-          print(f" ERROR: Error running foam: {e}")
-          # Generate fallback sphere
-          collision_spheres[link_name] = [{"origin": [0.0, 0.0, 0.0], "radius": 0.05}]
-          self_collision_spheres[link_name] = [{"origin": [0.0, 0.0, 0.0], "radius": 0.05}]
-      else:
-        print(f" WARNING: Mesh file not found: {mesh_path}")
+      print(f"Successfully generated spheres for {len(collision_spheres)} links")
+      
+    except json.JSONDecodeError as e:
+      print(f"ERROR: Failed to parse wrapper output as JSON: {e}")
+      print(f"Raw output: {result.stdout[:500]}...")
+      return False
+    
+  except subprocess.TimeoutExpired:
+    print(f"ERROR: Foam wrapper timed out after 300 seconds")
+    return False
+  except Exception as e:
+    print(f"ERROR: Error running foam wrapper: {e}")
+    return False
   
   # Save generated spheres to collision_spheres subdirectory
+  urdf_path = Path(urdf_path)
+  urdf_dir = urdf_path.parent
   collision_spheres_dir = urdf_dir / "collision_spheres"
-  collision_spheres_dir.mkdir(exist_ok=True)  # Create directory if it doesn't exist
+  collision_spheres_dir.mkdir(exist_ok=True)
   
   collision_path = collision_spheres_dir / "collision_spheres.json"
   self_collision_path = collision_spheres_dir / "self_collision_spheres.json"
@@ -265,6 +333,9 @@ def load_link_for_editing(urdf_path, link_name, sphere_type="collision", apply_c
   
   # Clear existing objects
   clear_scene()
+  
+  # Clean up any orphaned spheres that might exist
+  clean_orphaned_spheres(link_name, sphere_type)
   
   # Create collections for organization
   mesh_collection, sphere_collection = create_collections(link_name, sphere_type)
@@ -416,8 +487,9 @@ def load_link_for_editing(urdf_path, link_name, sphere_type="collision", apply_c
     for i, sphere in enumerate(link_spheres):
       origin = sphere['origin']
       radius = sphere['radius']
-      sphere_obj = add_sphere(origin[0], origin[1], origin[2], radius, 
-                  name_prefix=f"{link_name}_{sphere_type}_", index=i)
+      sphere_obj = add_sphere(origin[0], origin[1], origin[2], radius)
+      # Override auto-detected name for loading from file
+      sphere_obj.name = f"{link_name}_{sphere_type}_{i}"
       
       # Move sphere to sphere collection
       move_object_to_collection(sphere_obj, sphere_collection)
@@ -527,48 +599,6 @@ def save_edited_spheres(urdf_path, link_name, sphere_type="collision"):
     print(f" Sphere {i}: pos=({origin[0]:.3f}, {origin[1]:.3f}, {origin[2]:.3f}), r={radius:.3f}")
 
 
-# Legacy functions (keeping for compatibility)
-def add_spheres_from_json(path):
-  """Load and add spheres from a JSON file organized per link."""
-  with open(path, 'r') as f:
-    data = json.load(f)
-
-  if not isinstance(data, dict):
-    raise ValueError("Expected a dictionary with link names as keys.")
-
-  counter = 0
-  for link_name, link_data in data.items():
-    if not isinstance(link_data, dict) or 'spheres' not in link_data:
-      continue
-    for sphere in link_data['spheres']:
-      origin = sphere['origin']
-      radius = sphere['radius']
-      add_sphere(*origin, radius, name_prefix=f"{link_name}_", index=counter)
-      counter += 1
-
-
-def convert_franka_spheres_to_json(spheres):
-  """Convert the Franka _SPHERES format into a JSON dict organized per link."""
-  out = {}
-  for radius, link_dict in spheres:
-    for link, arr in link_dict.items():
-      if link not in out:
-        out[link] = {"spheres": []}
-      for coords in arr:
-        out[link]["spheres"].append({"origin": list(coords), "radius": radius})
-  return out
-
-
-def convert_self_collision_spheres_to_json(spheres):
-  """Convert the _SELF_COLLISION_SPHERES list into a JSON dict organized per link."""
-  out = {}
-  for link, pos, radius in spheres:
-    if link not in out:
-      out[link] = {"spheres": []}
-    out[link]["spheres"].append({"origin": pos, "radius": radius})
-  return out
-
-
 def apply_obj_coordinate_fix(mesh_obj):
   """
   Apply coordinate system transformation for .obj files.
@@ -625,225 +655,10 @@ def apply_custom_mesh_transform(mesh_obj, rotation_axis='X', rotation_degrees=-9
   print(f"  SUCCESS: Applied {rotation_degrees}° {rotation_axis}-axis rotation")
 
 
-def test_mesh_alignment(urdf_path, link_name):
-  """
-  Interactive function to test different coordinate transformations
-  and find the correct one for your robot.
-  """
-  print(f"\nTESTING MESH ALIGNMENT FOR {link_name}")
-  print("=" * 50)
-  
-  # Load without coordinate fix first
-  print("Loading mesh without coordinate fix...")
-  success = load_link_for_editing(urdf_path, link_name, 'collision', apply_coordinate_fix=False)
-  
-  if not success:
-    print("ERROR: Failed to load link")
-    return
-  
-  # Find the mesh object
-  mesh_obj = None
-  for obj in bpy.data.objects:
-    if obj.name.endswith('_mesh'):
-      mesh_obj = obj
-      break
-  
-  if not mesh_obj:
-    print("ERROR: No mesh object found")
-    return
-  
-  print(f"\nMESH ALIGNMENT TESTING")
-  print("Try these common transformations:")
-  print("1. -90° X-axis (Y-up to Z-up) - Most common for .obj files")
-  print("2. +90° X-axis (alternative)")
-  print("3. -90° Y-axis")
-  print("4. +90° Y-axis") 
-  print("5. 180° Z-axis")
-  
-  transformations = [
-    ('X', -90, "Y-up to Z-up (most common)"),
-    ('X', 90, "Alternative X rotation"),
-    ('Y', -90, "Y-axis rotation"),
-    ('Y', 90, "Alternative Y rotation"),
-    ('Z', 180, "Z-axis flip")
-  ]
-  
-  print(f"\nTesting transformations on {mesh_obj.name}...")
-  print("Look at the 3D viewport to see which alignment looks correct!")
-  
-  # Store original transform
-  original_matrix = mesh_obj.matrix_world.copy()
-  
-  for i, (axis, degrees, description) in enumerate(transformations):
-    print(f"\n--- Test {i+1}: {description} ---")
-    
-    # Reset to original
-    mesh_obj.matrix_world = original_matrix.copy()
-    
-    # Apply test transformation
-    apply_custom_mesh_transform(mesh_obj, axis, degrees)
-    
-    # Wait for user input
-    response = input("Does this look correct? (y/n/quit): ").lower()
-    if response == 'y':
-      print(f"SUCCESS: Found correct transformation: {degrees}° {axis}-axis")
-      print(f"  Use: apply_custom_mesh_transform(mesh_obj, '{axis}', {degrees})")
-      return
-    elif response == 'quit':
-      break
-  
-  # Reset to original if no good match found
-  mesh_obj.matrix_world = original_matrix.copy()
-  print("TOGGLE: Reset to original orientation")
-  print("You may need to find a custom transformation for this robot")
-
-
 def get_mesh_object(link_name):
   """Get the mesh object for a loaded link."""
   mesh_name = f"{link_name}_mesh"
   return bpy.data.objects.get(mesh_name)
-
-
-def debug_import_behavior(urdf_path, link_name):
-  """
-  Debug function to understand how Blender imports different file formats
-  and what coordinate transformations are applied by default.
-  """
-  print(f"\nDEBUGGING IMPORT BEHAVIOR FOR {link_name}")
-  print("=" * 60)
-  
-  urdf_dir = Path(urdf_path).parent
-  
-  # Parse URDF to get mesh path
-  try:
-    links = parse_urdf(urdf_path)
-    link_info = links.get(link_name)
-    if not link_info:
-      print(f"ERROR: Link '{link_name}' not found in URDF")
-      return
-  except Exception as e:
-    print(f"ERROR: Error parsing URDF: {e}")
-    return
-  
-  # Get mesh path
-  mesh_path = None
-  if link_info['visual_mesh']:
-    mesh_path = urdf_dir / link_info['visual_mesh']
-  elif link_info['collision_mesh']:
-    mesh_path = urdf_dir / link_info['collision_mesh']
-  
-  if not mesh_path or not mesh_path.exists():
-    print(f"ERROR: No mesh found for link '{link_name}'")
-    return
-  
-  print(f"Mesh file: {mesh_path}")
-  print(f"File format: {mesh_path.suffix}")
-  
-  # Test 1: Import WITHOUT any coordinate fixes
-  print(f"\nTEST 1: Import {mesh_path.suffix} file WITHOUT coordinate fixes")
-  clear_scene()
-  
-  try:
-    # Import based on file type WITHOUT coordinate fixes
-    if mesh_path.suffix.lower() == '.obj':
-      print("  Using: bpy.ops.wm.obj_import()")
-      bpy.ops.wm.obj_import(filepath=str(mesh_path))
-    elif mesh_path.suffix.lower() == '.stl':
-      print("  Using: bpy.ops.wm.stl_import()")
-      bpy.ops.wm.stl_import(filepath=str(mesh_path))
-    elif mesh_path.suffix.lower() == '.dae':
-      print("  Using: bpy.ops.wm.collada_import()")
-      bpy.ops.wm.collada_import(filepath=str(mesh_path))
-    
-    # Check what rotation was applied by the importer
-    mesh_obj = bpy.context.selected_objects[0] if bpy.context.selected_objects else None
-    if mesh_obj:
-      rotation = mesh_obj.rotation_euler
-      print(f"  Default rotation after import:")
-      print(f"   X: {rotation.x:.3f} rad ({rotation.x * 57.2958:.1f}°)")
-      print(f"   Y: {rotation.y:.3f} rad ({rotation.y * 57.2958:.1f}°)")
-      print(f"   Z: {rotation.z:.3f} rad ({rotation.z * 57.2958:.1f}°)")
-      
-      # Check if rotation is close to 90° on any axis
-      x_deg = rotation.x * 57.2958
-      y_deg = rotation.y * 57.2958
-      z_deg = rotation.z * 57.2958
-      
-      if abs(x_deg - 90) < 5:
-        print(f"  WARNING: X rotation (~90°) detected - typical Y-up to Z-up conversion")
-      elif abs(x_deg + 90) < 5:
-        print(f"  WARNING: X rotation (~-90°) detected - typical Z-up to Y-up conversion")
-      
-      if abs(y_deg) > 5 or abs(z_deg) > 5:
-        print(f"  WARNING: Y or Z rotation detected - unusual for coordinate conversion")
-    else:
-      print("  ERROR: No object found after import")
-  
-  except Exception as e:
-    print(f"  ERROR: Import failed: {e}")
-  
-  # Test 2: Load spheres to compare positions
-  print(f"\nTEST 2: Load spheres for comparison")
-  sphere_file = "collision_spheres.json"
-  sphere_path = urdf_dir / sphere_file
-  
-  if sphere_path.exists():
-    with open(sphere_path, 'r') as f:
-      sphere_data = json.load(f)
-    
-    link_spheres = sphere_data.get(link_name, [])
-    
-    if link_spheres:
-      first_sphere = link_spheres[0]
-      sphere_obj = add_sphere(
-        first_sphere['origin'][0], 
-        first_sphere['origin'][1], 
-        first_sphere['origin'][2], 
-        first_sphere['radius'],
-        name_prefix=f"debug_sphere_"
-      )
-      print(f"  Added sphere at: {first_sphere['origin']}")
-      print(f"  Sphere radius: {first_sphere['radius']}")
-    else:
-      print("  WARNING: No spheres found for this link")
-  else:
-    print("  WARNING: No collision_spheres.json found")
-  
-  print(f"\nANALYSIS:")
-  print("1. Check the 3D viewport - do mesh and sphere align?")
-  print("2. Look at Object Properties panel (bottom right)")
-  print("3. Note the rotation values shown there")
-  print("4. Try manually setting X rotation to 0° and see if alignment improves")
-
-
-def check_blender_import_settings():
-  """
-  Check Blender's import addon settings to understand default behavior.
-  """
-  print(f"\n🔧 CHECKING BLENDER IMPORT ADDON SETTINGS")
-  print("=" * 50)
-  
-  import addon_utils
-  
-  # Check which import addons are enabled
-  import_addons = [
-    ('io_scene_obj', 'OBJ Import/Export'),
-    ('io_mesh_stl', 'STL Import/Export'), 
-    ('io_scene_gltf2', 'glTF 2.0 Import/Export'),
-    ('io_mesh_ply', 'PLY Import/Export'),
-    ('io_scene_x3d', 'X3D Import/Export'),
-  ]
-  
-  for addon_name, description in import_addons:
-    try:
-      addon_info = addon_utils.check(addon_name)
-      status = "SUCCESS: ENABLED" if addon_info[0] else "ERROR: DISABLED"
-      print(f"{description:<25} {status}")
-    except:
-      print(f"{description:<25} ❓ UNKNOWN")
-  
-  print(f"\nTIP: If .obj files are rotated but .stl files aren't,")
-  print(f"  it suggests the .obj importer has different default settings.")
 
 
 def compare_file_formats(urdf_path, link_name):
@@ -976,7 +791,7 @@ def add_manual_sphere(link_name, sphere_type, x, y, z, radius, description="manu
   if description and description != "manual":
     sphere_name += f"_{description}"
   
-  sphere_obj = add_sphere(x, y, z, radius, name_prefix="", index=None)
+  sphere_obj = add_sphere(x, y, z, radius)
   sphere_obj.name = sphere_name
   
   print(f"SUCCESS: Added manual sphere: {sphere_name}")
@@ -1121,8 +936,9 @@ def generate_and_load_spheres(urdf_path, link_name, sphere_type="collision", cle
   for i, sphere in enumerate(generated_spheres):
     origin = sphere['origin']
     radius = sphere['radius']
-    sphere_obj = add_sphere(origin[0], origin[1], origin[2], radius, 
-                name_prefix=f"{link_name}_{sphere_type}_", index=i)
+    sphere_obj = add_sphere(origin[0], origin[1], origin[2], radius)
+    # Override auto-detected name for generated spheres
+    sphere_obj.name = f"{link_name}_{sphere_type}_{i}"
     
     # Move sphere to sphere collection
     move_object_to_collection(sphere_obj, sphere_collection)
@@ -1184,12 +1000,7 @@ def create_collections(link_name, sphere_type):
 
 def move_object_to_collection(obj, target_collection):
   """Move an object to a specific collection, removing it from others."""
-  # Remove from all collections first
-  for collection in obj.users_collection:
-    collection.objects.unlink(obj)
-  
-  # Add to target collection
-  target_collection.objects.link(obj)
+  return move_object_to_collection_safe(obj, target_collection)
 
 
 def hide_meshes(link_name):
@@ -1373,3 +1184,598 @@ def cleanup_empty_collections():
     print(f"CLEANUP: Removed empty collection: {collection_name}")
   
   print(f"SUCCESS: Cleaned up {len(collections_to_remove)} empty collections")
+
+
+def create_spherified_urdf(urdf_path, spheres_dict, output_path):
+    """
+    Create a modified URDF file where collision geometries are replaced with spheres.
+    
+    Args:
+        urdf_path: Path to original URDF file
+        spheres_dict: Dictionary of spheres organized by link name
+        output_path: Path for the output URDF file
+    """
+    print(f"Creating spherified URDF: {output_path}")
+    
+    # Parse the original URDF
+    tree = ET.parse(urdf_path)
+    root = tree.getroot()
+    urdf_dir = Path(urdf_path).parent
+    
+    total_spheres = 0
+    
+    # Process each link
+    for link in root.findall('link'):
+        link_name = link.get('name')
+        
+        if link_name not in spheres_dict:
+            continue
+            
+        spheres = spheres_dict[link_name]
+        if not spheres:
+            continue
+        
+        # Remove existing collision elements
+        for collision in link.findall('collision'):
+            link.remove(collision)
+        
+        # Add sphere collision elements
+        for i, sphere in enumerate(spheres):
+            collision_elem = ET.SubElement(link, 'collision')
+            
+            # Create geometry with sphere
+            geometry_elem = ET.SubElement(collision_elem, 'geometry')
+            sphere_elem = ET.SubElement(geometry_elem, 'sphere')
+            sphere_elem.set('radius', str(sphere['radius']))
+            
+            # Create origin
+            origin_elem = ET.SubElement(collision_elem, 'origin')
+            xyz_str = ' '.join(map(str, sphere['origin']))
+            origin_elem.set('xyz', xyz_str)
+            origin_elem.set('rpy', '0 0 0')
+            
+            total_spheres += 1
+    
+    # Convert relative mesh paths to absolute file:// paths
+    for mesh in root.findall('.//mesh'):
+        filename = mesh.get('filename')
+        if filename and not filename.startswith('file://'):
+            if filename.startswith('package://'):
+                # Remove package:// prefix if present
+                filename = filename[len('package://'):]
+            
+            # Make absolute path with file:// prefix
+            abs_path = urdf_dir / filename
+            mesh.set('filename', f'file://{abs_path.absolute()}')
+    
+    # Write the modified URDF
+    tree.write(output_path, encoding='utf-8', xml_declaration=True)
+    
+    print(f"SUCCESS: Created spherified URDF with {total_spheres} spheres")
+    print(f"  Output: {output_path}")
+
+
+def create_visualization_urdfs(urdf_path):
+    """
+    Create visualization URDFs with collision and self-collision spheres.
+    Automatically finds sphere JSON files and creates two output URDFs.
+    
+    Args:
+        urdf_path: Path to original URDF file
+    """
+    print(f"\n=== CREATING VISUALIZATION URDFS ===")
+    
+    urdf_path = Path(urdf_path)
+    urdf_dir = urdf_path.parent
+    robot_name = urdf_path.stem
+    
+    # Look for sphere files in collision_spheres subdirectory
+    collision_spheres_dir = urdf_dir / "collision_spheres"
+    collision_spheres_path = collision_spheres_dir / "collision_spheres.json"
+    self_collision_spheres_path = collision_spheres_dir / "self_collision_spheres.json"
+    
+    created_files = []
+    
+    # Create collision spheres URDF
+    if collision_spheres_path.exists():
+        with open(collision_spheres_path, 'r') as f:
+            collision_spheres = json.load(f)
+        
+        output_path = urdf_dir / f"{robot_name}_collision_spheres.urdf"
+        create_spherified_urdf(urdf_path, collision_spheres, output_path)
+        created_files.append(output_path)
+    else:
+        print(f"WARNING: No collision_spheres.json found in {collision_spheres_dir}")
+    
+    # Create self-collision spheres URDF
+    if self_collision_spheres_path.exists():
+        with open(self_collision_spheres_path, 'r') as f:
+            self_collision_spheres = json.load(f)
+        
+        output_path = urdf_dir / f"{robot_name}_self_collision_spheres.urdf"
+        create_spherified_urdf(urdf_path, self_collision_spheres, output_path)
+        created_files.append(output_path)
+    else:
+        print(f"WARNING: No self_collision_spheres.json found in {collision_spheres_dir}")
+    
+    if created_files:
+        print(f"\nSUCCESS: Created {len(created_files)} visualization URDFs")
+        for file in created_files:
+            print(f"  {file}")
+        print("\nThese URDFs can be loaded directly in RViz and Foxglove Studio!")
+    else:
+        print("ERROR: No sphere files found - cannot create visualization URDFs")
+    
+    return created_files
+
+
+def verify_urdf_spheres(urdf_path):
+    """
+    Verify and analyze a spherified URDF file.
+    Shows statistics about spheres per link.
+    
+    Args:
+        urdf_path: Path to spherified URDF file
+    """
+    print(f"\n=== VERIFYING SPHERIFIED URDF ===")
+    print(f"File: {urdf_path}")
+    
+    try:
+        tree = ET.parse(urdf_path)
+        root = tree.getroot()
+        
+        total_spheres = 0
+        link_stats = []
+        
+        for link in root.findall('link'):
+            link_name = link.get('name')
+            collision_count = 0
+            sphere_count = 0
+            
+            for collision in link.findall('collision'):
+                collision_count += 1
+                geometry = collision.find('geometry')
+                if geometry is not None and geometry.find('sphere') is not None:
+                    sphere_count += 1
+            
+            if collision_count > 0:
+                link_stats.append([link_name, str(collision_count), str(sphere_count)])
+                total_spheres += sphere_count
+        
+        # Print formatted table
+        if link_stats:
+            headers = ["Link Name", "Collisions", "Spheres"]
+            col_widths = []
+            all_rows = [headers] + link_stats
+            
+            for i in range(len(headers)):
+                max_width = max(len(row[i]) for row in all_rows)
+                col_widths.append(max_width + 2)
+            
+            header_format = "".join(f"{headers[i]:<{col_widths[i]}}" for i in range(len(headers)))
+            print(f"\n{header_format}")
+            print("-" * sum(col_widths))
+            
+            for row in link_stats:
+                row_format = "".join(f"{row[i]:<{col_widths[i]}}" for i in range(len(row)))
+                print(row_format)
+            
+            print(f"\nSUCCESS: URDF contains {total_spheres} sphere collisions across {len(link_stats)} links")
+        else:
+            print("WARNING: No collision spheres found in URDF")
+            
+    except Exception as e:
+        print(f"ERROR: Failed to parse URDF: {e}")
+
+
+def batch_create_visualization_urdfs(urdf_directory):
+    """
+    Create visualization URDFs for all URDF files in a directory.
+    
+    Args:
+        urdf_directory: Directory containing URDF files
+    """
+    print(f"\n=== BATCH CREATING VISUALIZATION URDFS ===")
+    
+    urdf_dir = Path(urdf_directory)
+    urdf_files = list(urdf_dir.glob("*.urdf"))
+    
+    if not urdf_files:
+        print(f"ERROR: No URDF files found in {urdf_dir}")
+        return
+    
+    print(f"Found {len(urdf_files)} URDF files")
+    
+    total_created = 0
+    for urdf_file in urdf_files:
+        print(f"\nProcessing: {urdf_file.name}")
+        try:
+            created_files = create_visualization_urdfs(urdf_file)
+            total_created += len(created_files)
+        except Exception as e:
+            print(f"ERROR: Failed to process {urdf_file.name}: {e}")
+    
+    print(f"\nSUCCESS: Created {total_created} visualization URDF files total")
+
+
+def convert_mesh_paths_to_absolute(urdf_path, output_path=None):
+    """
+    Convert relative mesh paths in a URDF to absolute file:// paths.
+    Useful for making URDFs compatible with RViz and Foxglove.
+    
+    Args:
+        urdf_path: Path to input URDF file
+        output_path: Path for output URDF (optional, defaults to input path with _absolute suffix)
+    """
+    urdf_path = Path(urdf_path)
+    
+    if output_path is None:
+        output_path = urdf_path.parent / f"{urdf_path.stem}_absolute.urdf"
+    
+    print(f"Converting mesh paths to absolute: {urdf_path} -> {output_path}")
+    
+    # Parse URDF
+    tree = ET.parse(urdf_path)
+    root = tree.getroot()
+    urdf_dir = urdf_path.parent
+    
+    converted_count = 0
+    
+    # Convert mesh paths
+    for mesh in root.findall('.//mesh'):
+        filename = mesh.get('filename')
+        if filename and not filename.startswith('file://'):
+            if filename.startswith('package://'):
+                # Remove package:// prefix if present
+                filename = filename[len('package://'):]
+            
+            # Make absolute path with file:// prefix
+            abs_path = urdf_dir / filename
+            if abs_path.exists():
+                mesh.set('filename', f'file://{abs_path.absolute()}')
+                converted_count += 1
+            else:
+                print(f"WARNING: Mesh file not found: {abs_path}")
+    
+    # Write the modified URDF
+    tree.write(output_path, encoding='utf-8', xml_declaration=True)
+    
+    print(f"SUCCESS: Converted {converted_count} mesh paths to absolute")
+    print(f"  Output: {output_path}")
+    
+    return output_path
+
+
+def extract_spheres_from_urdf(urdf_path, output_type='collision'):
+    """
+    Extract sphere collision geometries from an existing URDF and save to JSON.
+    Useful for reverse engineering sphere data from existing spherified URDFs.
+    
+    Args:
+        urdf_path: Path to URDF file containing sphere collision geometries
+        output_type: Type of output file ('collision' or 'self_collision')
+    """
+    print(f"\n=== EXTRACTING SPHERES FROM URDF ===")
+    print(f"Input: {urdf_path}")
+    print(f"Output type: {output_type}")
+    
+    urdf_path = Path(urdf_path)
+    urdf_dir = urdf_path.parent
+    
+    # Create output directory
+    output_dir = urdf_dir / "collision_spheres"
+    output_dir.mkdir(exist_ok=True)
+    
+    # Parse URDF
+    tree = ET.parse(urdf_path)
+    root = tree.getroot()
+    
+    spheres_dict = {}
+    total_spheres = 0
+    
+    # Extract spheres from each link
+    for link in root.findall('link'):
+        link_name = link.get('name')
+        link_spheres = []
+        
+        for collision in link.findall('collision'):
+            geometry = collision.find('geometry')
+            if geometry is not None:
+                sphere_elem = geometry.find('sphere')
+                if sphere_elem is not None:
+                    # Get radius
+                    radius = float(sphere_elem.get('radius'))
+                    
+                    # Get origin
+                    origin_elem = collision.find('origin')
+                    if origin_elem is not None:
+                        xyz_str = origin_elem.get('xyz', '0 0 0')
+                        origin = [float(x) for x in xyz_str.split()]
+                    else:
+                        origin = [0.0, 0.0, 0.0]
+                    
+                    link_spheres.append({
+                        'origin': origin,
+                        'radius': radius
+                    })
+                    total_spheres += 1
+        
+        if link_spheres:
+            spheres_dict[link_name] = link_spheres
+    
+    # Save to JSON
+    if output_type == 'collision':
+        output_path = output_dir / "collision_spheres.json"
+    else:
+        output_path = output_dir / "self_collision_spheres.json"
+    
+    with open(output_path, 'w') as f:
+        json.dump(spheres_dict, f, indent=2)
+    
+    print(f"SUCCESS: Extracted {total_spheres} spheres from {len(spheres_dict)} links")
+    print(f"  Output: {output_path}")
+    
+    return spheres_dict
+
+
+####### Legacy functions #######
+def add_spheres_from_json(path):
+  """Load and add spheres from a JSON file organized per link."""
+  with open(path, 'r') as f:
+    data = json.load(f)
+
+  if not isinstance(data, dict):
+    raise ValueError("Expected a dictionary with link names as keys.")
+
+  counter = 0
+  for link_name, link_data in data.items():
+    if not isinstance(link_data, dict) or 'spheres' not in link_data:
+      continue
+    for sphere in link_data['spheres']:
+      origin = sphere['origin']
+      radius = sphere['radius']
+      sphere_obj = add_sphere(*origin, radius)
+      sphere_obj.name = f"{link_name}_{counter}"
+      counter += 1
+
+
+def convert_franka_spheres_to_json(spheres):
+  """Convert the Franka _SPHERES format into a JSON dict organized per link."""
+  out = {}
+  for radius, link_dict in spheres:
+    for link, arr in link_dict.items():
+      if link not in out:
+        out[link] = {"spheres": []}
+      for coords in arr:
+        out[link]["spheres"].append({"origin": list(coords), "radius": radius})
+  return out
+
+
+def convert_self_collision_spheres_to_json(spheres):
+  """Convert the _SELF_COLLISION_SPHERES list into a JSON dict organized per link."""
+  out = {}
+  for link, pos, radius in spheres:
+    if link not in out:
+      out[link] = {"spheres": []}
+    out[link]["spheres"].append({"origin": pos, "radius": radius})
+  return out
+
+
+def debug_sphere_objects(link_name, sphere_type="collision"):
+  """
+  Debug function to find all sphere objects that match the naming pattern,
+  even if they're hidden or in unexpected collections.
+  """
+  sphere_prefix = f"{link_name}_{sphere_type}_"
+  
+  print(f"\n=== DEBUGGING SPHERE OBJECTS FOR {link_name} ({sphere_type.upper()}) ===")
+  print(f"Searching for objects with prefix: '{sphere_prefix}'")
+  
+  all_matching_objects = []
+  hidden_objects = []
+  collection_info = {}
+  
+  for obj in bpy.data.objects:
+    if obj.name.startswith(sphere_prefix):
+      all_matching_objects.append(obj)
+      
+      # Check if object is hidden
+      is_hidden = obj.hide_viewport or obj.hide_get()
+      if is_hidden:
+        hidden_objects.append(obj)
+      
+      # Check which collections this object belongs to
+      obj_collections = [col.name for col in obj.users_collection]
+      collection_info[obj.name] = {
+        'collections': obj_collections,
+        'hidden': is_hidden,
+        'location': (obj.location.x, obj.location.y, obj.location.z),
+        'radius': obj.dimensions.x / 2 if obj.dimensions.x > 0 else 0.0
+      }
+  
+  print(f"Found {len(all_matching_objects)} objects matching pattern:")
+  for obj_name, info in collection_info.items():
+    status = "HIDDEN" if info['hidden'] else "VISIBLE"
+    collections_str = ", ".join(info['collections']) if info['collections'] else "NO COLLECTIONS"
+    loc = info['location']
+    radius = info['radius']
+    print(f"  {status}: {obj_name}")
+    print(f"    Collections: {collections_str}")
+    print(f"    Location: ({loc[0]:.3f}, {loc[1]:.3f}, {loc[2]:.3f}), Radius: {radius:.3f}")
+  
+  if hidden_objects:
+    print(f"\nWARNING: Found {len(hidden_objects)} hidden objects that would still be saved!")
+    print("These hidden objects might be causing your phantom sphere issue.")
+  
+  return all_matching_objects, hidden_objects, collection_info
+
+
+def clean_all_sphere_objects(link_name, sphere_type="collision", confirm=True):
+  """
+  Remove ALL sphere objects that match the naming pattern, including hidden ones.
+  
+  Args:
+    link_name: The robot link name
+    sphere_type: 'collision' or 'self_collision'
+    confirm: If True, shows what will be deleted and asks for confirmation
+  """
+  sphere_prefix = f"{link_name}_{sphere_type}_"
+  
+  # Find all matching objects
+  objects_to_remove = []
+  for obj in bpy.data.objects:
+    if obj.name.startswith(sphere_prefix):
+      objects_to_remove.append(obj)
+  
+  if not objects_to_remove:
+    print(f"SUCCESS: No sphere objects found for {link_name} ({sphere_type})")
+    return True
+  
+  if confirm:
+    print(f"\nFOUND {len(objects_to_remove)} SPHERE OBJECTS TO DELETE:")
+    for obj in objects_to_remove:
+      status = "HIDDEN" if (obj.hide_viewport or obj.hide_get()) else "VISIBLE"
+      collections = [col.name for col in obj.users_collection]
+      collections_str = ", ".join(collections) if collections else "NO COLLECTIONS"
+      print(f"  {status}: {obj.name} (in: {collections_str})")
+    
+    print(f"\nThis will PERMANENTLY DELETE all {len(objects_to_remove)} objects.")
+    response = input("Type 'yes' to confirm deletion: ")
+    if response.lower() != 'yes':
+      print("CANCELLED: No objects were deleted")
+      return False
+  
+  # Remove all matching objects
+  for obj in objects_to_remove:
+    print(f"DELETING: {obj.name}")
+    bpy.data.objects.remove(obj, do_unlink=True)
+  
+  print(f"SUCCESS: Deleted {len(objects_to_remove)} sphere objects for {link_name} ({sphere_type})")
+  return True
+
+
+def show_save_preview(link_name, sphere_type="collision"):
+  """
+  Show what spheres would be saved without actually saving them.
+  Helps identify phantom spheres before saving.
+  """
+  print(f"\n=== SAVE PREVIEW FOR {link_name} ({sphere_type.upper()}) ===")
+  
+  sphere_prefix = f"{link_name}_{sphere_type}_"
+  spheres_to_save = []
+  
+  for obj in bpy.data.objects:
+    if obj.type == 'MESH' and obj.name.startswith(sphere_prefix):
+      loc = obj.location
+      radius = obj.dimensions.x / 2
+      is_hidden = obj.hide_viewport or obj.hide_get()
+      collections = [col.name for col in obj.users_collection]
+      
+      sphere_data = {
+        "name": obj.name,
+        "origin": [round(loc.x, 6), round(loc.y, 6), round(loc.z, 6)],
+        "radius": round(radius, 6),
+        "hidden": is_hidden,
+        "collections": collections
+      }
+      spheres_to_save.append(sphere_data)
+  
+  if not spheres_to_save:
+    print("No spheres found to save.")
+    return []
+  
+  print(f"Would save {len(spheres_to_save)} spheres:")
+  for i, sphere in enumerate(spheres_to_save):
+    status = "HIDDEN" if sphere['hidden'] else "VISIBLE"
+    collections_str = ", ".join(sphere['collections']) if sphere['collections'] else "NO COLLECTIONS"
+    origin = sphere['origin']
+    radius = sphere['radius']
+    print(f"  {i}: {status} {sphere['name']}")
+    print(f"      Location: ({origin[0]:.3f}, {origin[1]:.3f}, {origin[2]:.3f}), Radius: {radius:.3f}")
+    print(f"      Collections: {collections_str}")
+  
+  return spheres_to_save
+
+
+def unhide_all_spheres(link_name, sphere_type="collision"):
+  """
+  Make all sphere objects visible (unhide them) to help locate phantom spheres.
+  """
+  sphere_prefix = f"{link_name}_{sphere_type}_"
+  unhidden_count = 0
+  
+  for obj in bpy.data.objects:
+    if obj.name.startswith(sphere_prefix):
+      if obj.hide_viewport or obj.hide_get():
+        obj.hide_viewport = False
+        obj.hide_set(False)
+        unhidden_count += 1
+        print(f"UNHIDDEN: {obj.name}")
+  
+  if unhidden_count > 0:
+    print(f"SUCCESS: Made {unhidden_count} hidden sphere objects visible")
+  else:
+    print("No hidden sphere objects found")
+  
+  return unhidden_count
+
+
+def clean_orphaned_spheres(link_name, sphere_type="collision"):
+  """
+  Remove sphere objects that match the naming pattern but aren't in the proper collection.
+  This fixes the issue where spheres exist outside collections and cause duplicates.
+  """
+  sphere_prefix = f"{link_name}_{sphere_type}_"
+  expected_collection_name = f"{link_name}_{sphere_type}_spheres"
+  
+  orphaned_objects = []
+  
+  for obj in bpy.data.objects:
+    if obj.name.startswith(sphere_prefix):
+      # Check if this object is in the expected collection
+      obj_collections = [col.name for col in obj.users_collection]
+      
+      if expected_collection_name not in obj_collections:
+        # This sphere is orphaned (not in the proper collection)
+        orphaned_objects.append(obj)
+  
+  if not orphaned_objects:
+    print(f"SUCCESS: No orphaned spheres found for {link_name} ({sphere_type})")
+    return True
+  
+  print(f"FOUND {len(orphaned_objects)} ORPHANED SPHERE OBJECTS:")
+  for obj in orphaned_objects:
+    collections_str = ", ".join([col.name for col in obj.users_collection]) if obj.users_collection else "NO COLLECTIONS"
+    print(f"  {obj.name} (in: {collections_str})")
+  
+  # Remove orphaned objects
+  for obj in orphaned_objects:
+    print(f"REMOVING ORPHANED: {obj.name}")
+    bpy.data.objects.remove(obj, do_unlink=True)
+  
+  print(f"SUCCESS: Cleaned up {len(orphaned_objects)} orphaned sphere objects")
+  return True
+
+
+def move_object_to_collection_safe(obj, target_collection):
+  """
+  Safely move an object to a collection with proper error handling and cleanup.
+  """
+  try:
+    # Remove from ALL collections first (including Scene Collection)
+    for collection in obj.users_collection[:]:  # Copy list to avoid modification during iteration
+      collection.objects.unlink(obj)
+    
+    # Add to target collection
+    target_collection.objects.link(obj)
+    
+    # Verify the move was successful
+    if target_collection not in obj.users_collection:
+      print(f"WARNING: Failed to move {obj.name} to {target_collection.name}")
+      return False
+    
+    return True
+    
+  except Exception as e:
+    print(f"ERROR: Failed to move {obj.name} to collection: {e}")
+    return False

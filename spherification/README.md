@@ -1,6 +1,25 @@
-# Spherification
+# Spherification Utils
 
-This folder contains utilities and scripts for visualizing and manipulating collision spheres in Blender, as well as converting between collision sphere representation formats.
+A comprehensive toolkit for creating and editing collision spheres for robotic systems using Blender as the visualization and editing environment.
+
+## Core Functions
+
+### Robot Analysis
+- `analyze_robot_spheres(urdf_path)` - Show formatted table of links and sphere counts
+
+### Sphere Generation
+- `generate_initial_spheres(urdf_path)` - Generate spheres using [foam](https://github.com/CoMMALab/foam/tree/master) for new robots
+- `parse_foam_output(foam_output_path)` - Parse foam's JSON output format
+
+### Interactive Editing
+- `load_link_for_editing(urdf_path, link_name, sphere_type='collision')` - Load mesh and spheres into Blender
+- `save_edited_spheres(urdf_path, link_name, sphere_type='collision')` - Save edited spheres back to JSON
+
+### URDF Generation
+- `create_visualization_urdfs(urdf_path)` - Create collision and self-collision visualization URDFs for use with RViz or Foxglove Studio
+- `create_spherified_urdf(urdf_path, spheres_dict, output_path)` - Create URDF with sphere collision geometries
+- `verify_urdf_spheres(urdf_path)` - Verify and analyze spherified URDF files
+- `convert_mesh_paths_to_absolute(urdf_path)` - Convert mesh paths to absolute file:// paths (preferred by RViz and Foxglove Studio)
 
 ## Standard JSON format for collision spheres
 
@@ -31,15 +50,33 @@ This folder contains utilities and scripts for visualizing and manipulating coll
 }
 ```
 
-All units in meters. These `.json` files are placed together with the robot's urdf,
-from which the link names are taken, stored in `assets/<robot_name>`.
+All units in meters. These `.json` files are placed in `collision_spheres/` in the directory of the robot's urdf,
+from which the link names are taken.
 
-## Contents
+## Sphere Types
 
-- `spherification_utils.py`: Python utilities for:
-  - Adding spheres to a Blender scene from JSON files.
-  - Printing information about spheres in the scene.
-  - Converting between different sphere data formats (e.g., original robofin Franka _SPHERES, _SELF_COLLISION_SPHERES) and a JSON format organized by robot link.
+- `"collision"` - Regular collision detection spheres
+- `"self_collision"` - Self-collision detection spheres (typically larger, fewer)
+
+It can be important to have both these sphere representations, as the needs for collision detection with the environment, and self-collision between the robots own non-adjacent links can differ.
+The regular `collision` spheres may not need to cover every vertex of the visual link mesh, it's up to your specification. Also, you may not want to cover the end-effector's contact surfaces. For the `self_collision` spheres, you will want to cover the full end-effector, and may want to be a bit more conservative, not letting any vertices peek through. 
+
+## File Structure
+
+The file structure after using the spherification utilities will look like this:
+
+```
+robot_directory/
+├── robot.urdf                           # Original URDF
+├── robot_collision_spheres.urdf         # Visualization URDF (collision)
+├── robot_self_collision_spheres.urdf    # Visualization URDF (self-collision)
+├── collision_spheres/
+│   ├── collision_spheres.json           # Collision spheres
+│   └── self_collision_spheres.json      # Self-collision spheres
+└── meshes/
+    ├── visual/                          # Visual meshes
+    └── collision/                       # Collision meshes
+```
 
 # Blender Sphere Editing Workflow
 
@@ -48,18 +85,18 @@ This guide explains how to use the sphere editing tools in Blender for robot col
 ## Prerequisites
 
 1. Blender 4.2 LTS installed
-2. Robot URDF file with mesh references
+2. Robot URDF file with mesh references, and the references meshes
 3. Optional: collision_spheres.json and self_collision_spheres.json files
 
 ## Quick Start
 
 ### 1. Open Blender and Import Module
 
-In Blender's Python console (Window > Toggle System Console):
+In Blender's Python console (click Scripting tab at the top):
 
 ```python
 import sys
-sys.path.append('/workspace/spherification')
+sys.path.append('/<absolute_path_to>/spherification')
 import spherification_utils
 ```
 
@@ -67,17 +104,19 @@ import spherification_utils
 
 ```python
 # Analyze robot structure and existing spheres
-spherification_utils.analyze_robot_spheres('assets/panda/panda.urdf')
+spherification_utils.analyze_robot_spheres('path/to/your/robot.urdf')
 ```
 
 This will show a properly formatted table like:
 ```
 Link Name          Visual Mesh  Collision  Self-Collision  
 -----------------------------------------------------------
-panda_link0        Yes          1          2               
-panda_link1        Yes          4          4               
+link_name0         Yes          1          2               
+link_name1         Yes          4          4               
 ...
 ```
+
+The last two columns show the number of spheres of each type.
 
 ### 3. Generate Initial Spheres (if needed)
 
@@ -88,166 +127,74 @@ If you don't have sphere files yet:
 spherification_utils.generate_initial_spheres('path/to/your/robot.urdf')
 ```
 
+This will take a few minutes on a modern desktop PC. The Blender interactive shell might appear to freeze up until it is finished.
+
 ### 4. Load Link for Editing
+
+Set "Material Preview" as the Viewport Shading mode (top right of blender viewport) to see the collision spheres in green.
 
 Load a specific link with its mesh and spheres:
 
 ```python
-# For collision spheres (with automatic coordinate system fix)
-spherification_utils.load_link_for_editing('assets/panda/panda.urdf', 'panda_link1', 'collision')
+# For collision spheres
+spherification_utils.load_link_for_editing('path/to/your/robot.urdf', 'link_name', 'collision')
 
 # For self-collision spheres  
-spherification_utils.load_link_for_editing('assets/panda/panda.urdf', 'panda_link1', 'self_collision')
+spherification_utils.load_link_for_editing('path/to/your/robot.urdf', 'link_name', 'self_collision')
 
-# Disable coordinate fix if needed
-spherification_utils.load_link_for_editing('assets/panda/panda.urdf', 'panda_link1', 'collision', apply_coordinate_fix=False)
+# Disable coordinate fix if needed (adjusts Y-up to Z-up for .obj files)
+spherification_utils.load_link_for_editing('path/to/your/robot.urdf', 'link_name', 'collision', apply_coordinate_fix=False)
 ```
 
 This will:
 - Clear the scene
-- Load the link's mesh (locked in place, coordinate-corrected)
+- Load the link's mesh (locked in place)
 - Add all spheres for that link (green, editable)
+
+Adjust the view by dragging with middle-click and shift+middle-click. Dragging with alt+middle-click will snap to the coordinate planes, which is helpful for precise editing.
+
 
 ### 5. Edit Spheres in Blender
 
 Use standard Blender controls:
 - **Select**: Left-click on spheres
-- **Move**: Press `G`, then `X`/`Y`/`Z` for axis-constrained movement
+- **Move**: Press `G`, then optionally `X`/`Y`/`Z` for axis-constrained movement
 - **Scale**: Press `S` to scale sphere size
 - **Delete**: Press `X` > Delete to remove spheres
-- **Add**: Use the `add_sphere()` function or duplicate existing ones
+- **Add**: Use the `add_sphere(x,y,z,radius)` function or duplicate existing ones (make sure they follow the same naming scheme, `{link_name}_{sphere_type}_{index}`, where `sphere_type` is either `collision` or `self_collision`)
 
-### 6. Unlock Mesh Objects (if needed)
 
-To unlock/unfreeze the mesh in Blender GUI:
-
-**Method 1: Outliner (recommended)**
-1. Open **Outliner** (top-right panel with scene collection)
-2. Find your mesh object (named like `panda_link1_mesh`)
-3. Click the **lock icons** next to the object name to toggle them off:
-   - 🔒➡️🔓 **Location lock** (position)
-   - 🔒➡️🔓 **Rotation lock** (orientation)
-   - 🔒➡️🔓 **Scale lock** (size)
-
-**Method 2: Properties Panel**
-1. Select the mesh object
-2. Press **N** to open properties panel
-3. Scroll to **Transform** section
-4. Uncheck the lock boxes
-
-### 7. Save Your Changes
+### 6. Save Your Changes
 
 ```python
 # Save collision spheres
-spherification_utils.save_edited_spheres('assets/panda/panda.urdf', 'panda_link1', 'collision')
+spherification_utils.save_edited_spheres('path/to/your/robot.urdf', 'link_name', 'collision')
 
 # Save self-collision spheres
-spherification_utils.save_edited_spheres('assets/panda/panda.urdf', 'panda_link1', 'self_collision')
+spherification_utils.save_edited_spheres('path/to/your/robot.urdf', 'link_name', 'self_collision')
 ```
 
-## Coordinate System Issues & Fixes
+I'd suggest editing all `collision` links and when you're satisfied, copy the contents of collision_spheres.json into self_collision_spheres.json, and then edit the `self_collision` links to just be a bit more conservative.
+After loading and saving each link that you want to have collision spheres, 
+the collision_spheres.json and self_collision_spheres.json files should be ready for use.
 
-### Common Problem: 90° Rotation Mismatch
+### 7. (Optional) Create urdfs with collision spheres for visualization
 
-**Issue**: .obj files often use Y-up coordinate system while URDF/robotics uses Z-up, causing spheres and meshes to appear misaligned.
-
-**Solution**: Automatic coordinate system fix is now enabled by default.
-
-### Testing Coordinate Alignment
-
-```python
-# Test with coordinate fix (default)
-spherification_utils.load_link_for_editing('assets/panda/panda.urdf', 'panda_link1', 'collision', apply_coordinate_fix=True)
-
-# Test without coordinate fix (for comparison)
-spherification_utils.load_link_for_editing('assets/panda/panda.urdf', 'panda_link1', 'self_collision', apply_coordinate_fix=False)
-```
-
-### Interactive Alignment Testing
-
-For finding the correct transformation for your specific robot:
-
-```python
-# Interactive testing of different coordinate transformations
-spherification_utils.test_mesh_alignment('assets/panda/panda.urdf', 'panda_link1')
-```
-
-### Manual Coordinate Fixes
-
-```python
-# Get mesh object
-mesh_obj = spherification_utils.get_mesh_object('panda_link1')
-
-# Apply custom transformation
-spherification_utils.apply_custom_mesh_transform(mesh_obj, 'X', -90)  # Y-up to Z-up
-spherification_utils.apply_custom_mesh_transform(mesh_obj, 'Z', 180)  # 180° flip
-```
-
-## Advanced Usage
-
-### Testing Script
-
-Run this in Blender to test all functionality:
-
-```python
-exec(open('/workspace/spherification/blender_test_script.py').read())
-```
-
-### Available Functions
-
-- `analyze_robot_spheres(urdf_path)` - Show robot analysis table
-- `generate_initial_spheres(urdf_path)` - Generate spheres using foam
-- `load_link_for_editing(urdf_path, link_name, sphere_type, apply_coordinate_fix=True)` - Load link for editing
-- `save_edited_spheres(urdf_path, link_name, sphere_type)` - Save sphere changes
-- `add_sphere(x, y, z, radius, name_prefix, index)` - Add new sphere manually
-- `clear_scene()` - Clear all objects from scene
-- `test_mesh_alignment(urdf_path, link_name)` - Interactive coordinate system testing
-- `apply_custom_mesh_transform(mesh_obj, axis, degrees)` - Manual coordinate fix
-- `get_mesh_object(link_name)` - Get mesh object reference
-
-### Sphere Types
-
-- `"collision"` - Regular collision detection spheres
-- `"self_collision"` - Self-collision detection spheres (typically larger, fewer)
-
-## File Structure
-
-After editing, your robot directory should contain:
+Make sure you have the collision_spheres.json and self_collision_spheres.json files ready at this step.
 
 ```
-assets/your_robot/
-├── robot.urdf
-├── collision_spheres.json      # Regular collision spheres
-├── self_collision_spheres.json # Self-collision spheres
-└── meshes/
-    ├── visual/
-    └── collision/
+create_visualization_urdfs('path/to/robot.urdf')
 ```
+
+This will create:
+- `robot_collision_spheres.urdf` - URDF with collision spheres
+- `robot_self_collision_spheres.urdf` - URDF with self-collision spheres
+
+Both URDFs use absolute file paths and can be loaded directly in **RViz** and **Foxglove Studio** for visualization!
+
 
 ## Tips
 
-1. **Start with visual meshes** - They're usually higher quality than collision meshes
-2. **Coordinate system fixes** - Automatic for .obj files, disable if not needed
-3. **Lock mesh objects** - The system automatically locks loaded meshes to prevent accidental movement
-4. **Use sphere hierarchy** - Large spheres for coarse coverage, small ones for details
-5. **Self-collision spheres** - Usually need to be larger to prevent false positives
-6. **Save frequently** - Use the save function after each link editing session
-7. **Test alignment** - Use the interactive testing function for new robots
-
-## Troubleshooting
-
-### Mesh Loading Issues
-- **Mesh not loading**: Check URDF paths and file formats (.obj, .stl, .dae supported)
-- **Import operator errors**: Script automatically tries multiple import methods
-- **Missing addons**: Script automatically enables required import addons
-
-### Coordinate System Issues
-- **90° rotation mismatch**: Enable `apply_coordinate_fix=True` (default)
-- **Wrong transformation**: Use `test_mesh_alignment()` to find correct fix
-- **Custom robots**: May need custom transformation parameters
-
-### General Issues
-- **No spheres visible**: Check that JSON files exist and contain data for the link
-- **Import errors**: Ensure Blender has access to the module path
-- **Foam generation fails**: Check that foam is installed at `/opt/foam/`
-- **Performance issues**: Work on one link at a time for large robots 
+1. **Use collision meshes as basis for foam sphere generation** - If your urdf has simplified collision meshes already, generating spheres from them will usually give you better results than using the detailed visual meshes. 
+2. **Use sphere hierarchy** - Large spheres for coarse coverage, small ones for details.
+3. **Self-collision spheres** - Sometimes need to be larger, more conservative. See the Franka robot for reference.
