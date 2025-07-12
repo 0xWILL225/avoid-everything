@@ -28,6 +28,9 @@ torch-geometric==2.6.1
 fastapi==0.115.12
 numba==0.61.2
 bpy==4.0.0
+pyzmq==27.0.0
+fasteners==0.19
+urdf_parser_py==0.0.4
 atob @ git+https://github.com/fishbotics/atob.git@fa15a01c66a2e825813cbac5fe0523d9b12d0203
 pyg-lib==0.4.0+pt21cu121
 torch-scatter==2.1.2+pt21cu121

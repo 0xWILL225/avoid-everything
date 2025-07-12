@@ -19,7 +19,7 @@ A comprehensive toolkit for creating and editing collision spheres for robotic s
 - `create_visualization_urdfs(urdf_path)` - Create collision and self-collision visualization URDFs for use with RViz or Foxglove Studio
 - `create_spherified_urdf(urdf_path, spheres_dict, output_path)` - Create URDF with sphere collision geometries
 - `verify_urdf_spheres(urdf_path)` - Verify and analyze spherified URDF files
-- `convert_mesh_paths_to_absolute(urdf_path)` - Convert mesh paths to absolute file:// paths (preferred by RViz and Foxglove Studio)
+- `convert_mesh_paths_to_absolute(urdf_path)` - Convert mesh paths to absolute file:// paths (often required by RViz and Foxglove Studio)
 
 ## Standard JSON format for collision spheres
 
@@ -191,6 +191,26 @@ This will create:
 - `robot_self_collision_spheres.urdf` - URDF with self-collision spheres
 
 Both URDFs use absolute file paths and can be loaded directly in **RViz** and **Foxglove Studio** for visualization!
+
+To visualize in RViz or Foxglove, you can do the following:
+
+In one terminal, set the urdf contents as an environment variable and run the robot state publisher:
+```
+export SPHERIZED_ROBOT_DESCRIPTION="$(cat assets/gp7/gp7_prepared.urdf)"
+ros2 run robot_state_publisher robot_state_publisher --ros-args -p robot_description:="$SPHERIZED_ROBOT_DESCRIPTION"
+```
+
+Open another terminal and run
+```
+ros2 run joint_state_publisher_gui joint_state_publisher_gui
+```
+
+Then in a third terminal run RViz, or Foxglove Studio (native application).
+```
+ros2 run rviz2 rviz2  # RViz for example
+```
+
+In both applications, you should be able to toggle viewing the collision meshes, and see the spheres.  
 
 
 ## Tips

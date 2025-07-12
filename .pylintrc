@@ -1,0 +1,7 @@
+[MASTER]
+# Add ROS2 paths to Python path
+init-hook='import sys; sys.path.append("/opt/ros/humble/lib/python3.10/site-packages"); sys.path.append("/opt/ros/humble/local/lib/python3.10/dist-packages"); sys.path.append("viz_server/src"); sys.path.append("robofin")'
+
+[MESSAGES CONTROL]
+# Disable import errors for ROS2 packages
+disable=import-error,no-name-in-module 

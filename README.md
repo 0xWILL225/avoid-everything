@@ -1,9 +1,22 @@
-# Fork: Avoid Everything
+# Fork: Avoid Everything (WIP)
 
 I had some trouble using the original project, so I made this fork to fix the issues with the code and make a more stable development container for the project that anyone can use. I added my own fork of robofin package as a submodule, so that I could edit its contents to make it more general, not specific to the Franka Panda robot, for which the fishbotics project is currently adapted. I might add the atob project as a submodule as well.  
-Because robofin it is currently a submodule, I needed to prepend all robofin imports with "robofin.", otherwise pylint and pyright would refuse to stop complaining. I don't plan for this change to be permanent. It will just be like this until the forks for robofin and perhaps also atob are finished and i do not need them as submodules any more.
+Because robofin it is currently a submodule, I needed to prepend all robofin imports with `robofin.`, otherwise `pylint` and `pyright` would refuse to stop complaining. I don't plan for this change to be permanent. It will just be like this until the forks for robofin and perhaps also atob are finished and i do not need them as submodules any more.
 
+### Spherification
 
+Check out the `spherification/README.md` if you want to create a collisions sphere representation of your robot, based on its `.urdf`. Collision spheres and self-collision spheres are required if you want to use the Avoid Everything project without modification. My forked version of robofin expects the file structure:
+```
+robot_directory/
+├── robot.urdf                           # Original URDF
+├── collision_spheres/
+│   ├── collision_spheres.json           # Collision spheres
+│   └── self_collision_spheres.json      # Self-collision spheres
+└── meshes/
+    ├── visual/                          # Visual meshes
+    └── collision/                       # Collision meshes
+```
+where `collision_spheres.json` and `self_collision_spheres.json` store the collision spheres and self-collision spheres respectively for each of the robot's links.
 
 ---
 Original README below:

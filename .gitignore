@@ -1,7 +1,11 @@
-*__pycache__/
+*__pycache__
 datasets/*
 lightning_logs/*
 wandb/*
 assets/*
 checkpoints/*
-sphere_database.json
+.pylint.d/
+*.egg-info
+build
+log
+install
