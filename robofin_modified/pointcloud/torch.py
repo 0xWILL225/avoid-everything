@@ -5,9 +5,9 @@ import torch
 import numpy as np
 import trimesh
 
-from robofin.robofin.torch_urdf import TorchURDF
-from robofin.robofin.robots import Robot
-from robofin.robofin.collision import FrankaSelfCollisionSampler as NumpySelfCollisionSampler
+from robofin.torch_urdf import TorchURDF
+from robofin.robots import Robot
+from robofin.collision import FrankaSelfCollisionSampler as NumpySelfCollisionSampler
 from geometrout.primitive import Sphere
 
 

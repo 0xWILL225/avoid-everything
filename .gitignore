@@ -2,7 +2,7 @@
 datasets/*
 lightning_logs/*
 wandb/*
-assets/*
+# assets/*
 checkpoints/*
 .pylint.d/
 *.egg-info

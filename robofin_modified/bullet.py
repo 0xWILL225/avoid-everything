@@ -5,8 +5,8 @@ import pybullet as p
 from geometrout.primitive import Cuboid, Sphere, Cylinder
 from geometrout.transform import SE3
 
-from robofin.robofin.robots import FrankaRobot, FrankaGripper
-from robofin.robofin.pointcloud.numpy import transform_pointcloud
+from robofin.robots import FrankaRobot, FrankaGripper
+from robofin.pointcloud.numpy import transform_pointcloud
 import math
 
 

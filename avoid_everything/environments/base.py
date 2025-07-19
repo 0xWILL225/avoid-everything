@@ -25,7 +25,7 @@ from typing import Any, List, Union
 
 import numpy as np
 from geometrout.primitive import Cuboid, Cylinder
-from robofin.robofin.collision import FrankaCollisionSpheres
+from robofin.collision import FrankaCollisionSpheres
 
 from avoid_everything.type_defs import NeutralCandidate, TaskOrientedCandidate
 

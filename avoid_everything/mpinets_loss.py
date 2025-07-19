@@ -24,8 +24,8 @@ from typing import Tuple
 from geometry import TorchCuboids, TorchCylinders
 import torch.nn.functional as F
 import torch
-from robofin.robofin.pointcloud.torch import RobotSampler
-from robofin.robofin.robots import Robot
+from robofin.pointcloud.torch import RobotSampler
+from robofin.robots import Robot
 
 
 def point_match_loss(input_pc: torch.Tensor, target_pc: torch.Tensor) -> torch.Tensor:

@@ -7,7 +7,7 @@ from typing import Callable
 import h5py
 import numpy as np
 from geometrout.primitive import Cuboid, CuboidArray, Cylinder, CylinderArray
-from robofin.robofin.robots import FrankaRobot
+from robofin.robots import FrankaRobot
 from tqdm.auto import tqdm, trange
 from pathlib import Path
 

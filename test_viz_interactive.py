@@ -234,7 +234,7 @@ def test_ghost_end_effector():
         return True
     except Exception as e:
         print(f"❌ Ghost end effector test failed: {e}")
-        print("Note: Make sure link_config.yaml has proper end effector configuration")
+        print("Note: Make sure robot_config.yaml has proper end effector configuration")
         return False
 
 

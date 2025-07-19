@@ -48,7 +48,7 @@
   
   // Set environment variables
   "remoteEnv": {
-    "PYTHONPATH": "/workspace:/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages:${PYTHONPATH}",
+    "PYTHONPATH": "/workspace:/workspace/robofin:/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages:${PYTHONPATH}",
     "DISPLAY": "${localEnv:DISPLAY}",
     "ROS_DOMAIN_ID": "0"
   },

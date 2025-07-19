@@ -4,8 +4,8 @@ import lightning.pytorch as pl
 import torch
 import torch_geometric.transforms as T
 import torchmetrics
-from robofin.robofin.robot_constants import RealFrankaConstants
-from robofin.robofin.samplers import TorchFrankaCollisionSampler, TorchFrankaSampler
+from robofin.robot_constants import RealFrankaConstants
+from robofin.samplers import TorchFrankaCollisionSampler, TorchFrankaSampler
 from torch.optim.lr_scheduler import LambdaLR
 
 from avoid_everything.geometry import TorchCuboids, TorchCylinders

@@ -28,10 +28,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from robofin.robofin.collision import FrankaCollisionSpheres
-from robofin.robofin.kinematics.numba import franka_arm_link_fk
-from robofin.robofin.robot_constants import RealFrankaConstants
-from robofin.robofin.samplers import NumpyFrankaSampler
+from robofin.collision import FrankaCollisionSpheres
+from robofin.kinematics.numba import franka_arm_link_fk
+from robofin.robot_constants import RealFrankaConstants
+from robofin.samplers import NumpyFrankaSampler
 
 from avoid_everything.dataset import Dataset as MPNDataset
 from avoid_everything.geometry import construct_mixed_point_cloud

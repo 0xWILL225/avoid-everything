@@ -24,7 +24,7 @@ from typing import Tuple
 
 import torch
 import torch.nn.functional as F
-from robofin.robofin.samplers import TorchFrankaSampler
+from robofin.samplers import TorchFrankaSampler
 
 from avoid_everything.geometry import TorchCuboids, TorchCylinders
 

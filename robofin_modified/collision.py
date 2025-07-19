@@ -3,8 +3,8 @@ Not sure where to put this function yet, but need it quickly so implementing it 
 Sphere model comes from STORM: https://github.com/NVlabs/storm/blob/e53556b64ca532e836f6bfd50893967f8224980e/content/configs/robot/franka_real_robot.yml
 """
 from urchin import URDF
-from robofin.robofin.robots import FrankaRobot
-from robofin.robofin.pointcloud.numpy import transform_pointcloud
+from robofin.robots import FrankaRobot
+from robofin.pointcloud.numpy import transform_pointcloud
 from geometrout.primitive import Sphere
 import logging
 import numpy as np

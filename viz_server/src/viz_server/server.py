@@ -72,21 +72,26 @@ class VizServer(Node):
         # ------------------------------------------------------------------ #
         # Load link config for base link name
         # ------------------------------------------------------------------ #
-        self.base_link_name: str = self._load_base_link_name()
-        if self.base_link_name == "error":
-            cprint("Error: base link name not found", "red")
+        try:
+            self.base_link_name: str = self._load_base_link_name()
+            cprint(f"Base link: {self.base_link_name}", "cyan")
+        except Exception as e:
+            cprint(f"Error loading base link name: {e}", "red")
             sys.exit(1)
-        cprint(f"Base link: {self.base_link_name}", "cyan")
-        self.eef_base_link_name: str = self._load_eef_base_link_name()
-        if self.eef_base_link_name == "error":
-            cprint("Error: eef base link name not found", "red")
+            
+        try:
+            self.eef_base_link_name: str = self._load_eef_base_link_name()
+            cprint(f"End effector base link: {self.eef_base_link_name}", "cyan")
+        except Exception as e:
+            cprint(f"Error loading end effector base link name: {e}", "red")
             sys.exit(1)
-        cprint(f"End effector base link: {self.eef_base_link_name}", "cyan")
-        self.eef_visual_links: list = self._load_eef_visual_links()
-        if self.eef_visual_links == []:
-            cprint("Error: eef visual links not found", "red")
+            
+        try:
+            self.eef_visual_links: list = self._load_eef_visual_links()
+            cprint(f"End effector visual links: {self.eef_visual_links}", "cyan")
+        except Exception as e:
+            cprint(f"Error loading end effector visual links: {e}", "red")
             sys.exit(1)
-        cprint(f"End effector visual links: {self.eef_visual_links}", "cyan")
         
         # Parse mimic joint relationships
         self.mimic_joints = self._parse_mimic_joints()
@@ -566,64 +571,67 @@ class VizServer(Node):
         cprint(f"Published static transform: world -> {self.base_link_name}", "green")
 
     def _load_base_link_name(self) -> str:
-        """Load base link name from link_config.yaml in the same directory as URDF."""
+        """Load base link name from robot_config.yaml in the same directory as URDF."""
         try:
             urdf_dir = Path(self.urdf_path).parent
-            config_path = urdf_dir / "link_config.yaml"
+            config_path = urdf_dir / "robot_config.yaml"
             
             if not config_path.exists():
-                cprint(f"Error: {config_path} not found","red")
-                return "error"
+                raise FileNotFoundError(f"robot_config.yaml not found at {config_path}")
             
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
             
-            base_link = config.get("link_config", {}).get("base_link_name", "error")
+            base_link = config.get("robot_config", {}).get("base_link_name")
+            if not base_link:
+                raise ValueError(f"base_link_name not found in robot_config.yaml at {config_path}")
+            
             return base_link
             
         except Exception as e:
-            cprint(f"Error loading link_config.yaml: {e}, using default 'base_link'", "yellow")
-            return "base_link"
+            raise RuntimeError(f"Error loading robot_config.yaml: {e}")
 
     def _load_eef_base_link_name(self) -> str:
-        """Load end effector base link name from link_config.yaml in the same directory as URDF."""
+        """Load end effector base link name from robot_config.yaml in the same directory as URDF."""
         try:
             urdf_dir = Path(self.urdf_path).parent
-            config_path = urdf_dir / "link_config.yaml"
+            config_path = urdf_dir / "robot_config.yaml"
             
             if not config_path.exists():
-                cprint(f"Error: {config_path} not found","red")
-                return "error"
+                raise FileNotFoundError(f"robot_config.yaml not found at {config_path}")
             
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
             
-            eef_base_link_name = config.get("link_config", {}).get("eef_base_link_name", "error")
+            eef_base_link_name = config.get("robot_config", {}).get("eef_base_link_name")
+            if not eef_base_link_name:
+                raise ValueError(f"eef_base_link_name not found in robot_config.yaml at {config_path}")
+            
             return eef_base_link_name
 
         except Exception as e:
-            cprint(f"Error loading link_config.yaml: {e}, returning default 'error'", "red")
-            return "error"
+            raise RuntimeError(f"Error loading robot_config.yaml: {e}")
 
     def _load_eef_visual_links(self) -> list:
-        """Load base link name from link_config.yaml in the same directory as URDF."""
+        """Load end effector visual links from robot_config.yaml in the same directory as URDF."""
         try:
             urdf_dir = Path(self.urdf_path).parent
-            config_path = urdf_dir / "link_config.yaml"
+            config_path = urdf_dir / "robot_config.yaml"
             
             if not config_path.exists():
-                cprint(f"Error: {config_path} not found","red")
-                return []
+                raise FileNotFoundError(f"robot_config.yaml not found at {config_path}")
             
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
             
-            eef_visual_links = config.get("link_config", {}).get("eef_visual_links", [])
+            eef_visual_links = config.get("robot_config", {}).get("eef_visual_links", [])
+            if not eef_visual_links:
+                raise ValueError(f"eef_visual_links not found or empty in robot_config.yaml at {config_path}")
+            
             return eef_visual_links
             
         except Exception as e:
-            cprint(f"Error loading link_config.yaml: {e}, returning default '[]'", "red")
-            return []
+            raise RuntimeError(f"Error loading robot_config.yaml: {e}")
 
     def _compute_link_transform(self, from_link: str, to_link: str) -> np.ndarray:
         """

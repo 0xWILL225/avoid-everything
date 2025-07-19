@@ -64,6 +64,12 @@ def connect(urdf: str, *, port: int = 5556) -> None:
     global _sock, _connected, PORT, _base_link_name
     PORT = port
 
+    # Check if robot_config.yaml exists before starting server
+    urdf_dir = Path(urdf).parent
+    config_path = urdf_dir / "robot_config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"robot_config.yaml not found at {config_path}. This file is required for viz_server to function.")
+
     if not _server_alive():
         cprint("viz_server not running — starting…", "yellow")
         if not Path(urdf).is_file():
@@ -71,9 +77,10 @@ def connect(urdf: str, *, port: int = 5556) -> None:
         
         cmd = f"{SERVER_CMD} --urdf {urdf}"
         
-        subprocess.Popen(
+        # Use pipes to capture output for debugging
+        process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             shell=True,
             executable="/bin/bash"
         )
@@ -83,8 +90,25 @@ def connect(urdf: str, *, port: int = 5556) -> None:
             if _server_alive():
                 break
             time.sleep(0.1)
+            
+            # Check if process has failed
+            if process.poll() is not None:
+                # Process has exited, get the output
+                stdout, stderr = process.communicate()
+                error_msg = f"viz_server failed to start. Exit code: {process.returncode}"
+                if stderr:
+                    error_msg += f"\nStderr: {stderr.decode()}"
+                if stdout:
+                    error_msg += f"\nStdout: {stdout.decode()}"
+                raise RuntimeError(error_msg)
         
         if not _server_alive():
+            # Process is still running but server didn't respond
+            process.terminate()
+            try:
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
             raise RuntimeError("Server failed to start within 10 seconds")
 
     # Load base link name from config
@@ -117,24 +141,25 @@ def _send(hdr: dict, payload: bytes | None = None) -> None:
 # Helper functions
 # ====================================================================== #
 def _load_base_link_name(urdf_path: str) -> str:
-    """Load base link name from link_config.yaml in the same directory as URDF."""
+    """Load base link name from robot_config.yaml in the same directory as URDF."""
     try:
         urdf_dir = Path(urdf_path).parent
-        config_path = urdf_dir / "link_config.yaml"
+        config_path = urdf_dir / "robot_config.yaml"
         
         if not config_path.exists():
-            cprint(f"Warning: {config_path} not found, using default 'base_link'", "yellow")
-            return "base_link"
+            raise FileNotFoundError(f"robot_config.yaml not found at {config_path}")
         
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         
-        base_link = config.get("link_config", {}).get("base_link_name", "base_link")
+        base_link = config.get("robot_config", {}).get("base_link_name")
+        if not base_link:
+            raise ValueError(f"base_link_name not found in robot_config.yaml at {config_path}")
+        
         return base_link
         
     except Exception as e:
-        cprint(f"Error loading link_config.yaml: {e}, using default 'base_link'", "yellow")
-        return "base_link"
+        raise RuntimeError(f"Error loading robot_config.yaml: {e}")
 
 
 # ====================================================================== #

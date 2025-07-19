@@ -39,9 +39,9 @@ from atob.planners.arm.aitstar import FrankaAITStar
 from atob.planners.arm.rrt_connect import FrankaRRTConnect
 from geometrout.primitive import Cuboid, CuboidArray, Cylinder, CylinderArray
 from ompl.util import noOutputHandler
-from robofin.robofin.bullet import Bullet
-from robofin.robofin.collision import FrankaCollisionSpheres
-from robofin.robofin.robots import FrankaRobot
+from robofin.bullet import Bullet
+from robofin.collision import FrankaCollisionSpheres
+from robofin.robots import FrankaRobot
 from tqdm.auto import tqdm
 
 from avoid_everything.data_pipeline.environments.base import Environment

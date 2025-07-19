@@ -32,9 +32,9 @@ import torch
 import pytorch_lightning as pl
 from pyquaternion import Quaternion
 from geometrout.primitive import Cuboid, Cylinder
-from robofin.robofin.pointcloud.torch import FrankaSampler
+from robofin.pointcloud.torch import FrankaSampler
 
-from robofin.robofin.robots import FrankaRealRobot
+from robofin.robots import FrankaRealRobot
 from mpinets.geometry import construct_mixed_point_cloud
 from mpinets import utils
 
