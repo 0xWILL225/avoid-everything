@@ -31,8 +31,6 @@ from geometry_msgs.msg import TransformStamped
 from urdf_parser_py.urdf import URDF
 from visualization_msgs.msg import Marker, MarkerArray
 
-print("SERVER.PY HELLOO")
-
 LOCK_FILE = "/tmp/viz_server.lock"
 ZMQ_PORT  = 5556
 
@@ -265,7 +263,7 @@ class VizServer(Node):
     def _handle_ghost_end_effector(self, hdr: Dict) -> None:
         """Spawn a translucent mesh for a URDF link."""
         link_names = self.eef_visual_links
-        pose = hdr["pose"]
+        pose = hdr["pose"] # [x, y, z, qx, qy, qz, qw]
         color = hdr.get("color", [0, 1, 0]); scale = hdr.get("scale", 1.0)
         alpha = hdr.get("alpha", 0.5)
 
@@ -418,7 +416,7 @@ class VizServer(Node):
         
         self.sock.send_json({"status": "ok"})
 
-    def _handle_clear_ghost_end_effector() -> None:
+    def _handle_clear_ghost_end_effector(self) -> None:
         """Clear all ghost end effector markers."""
         # Create DELETE markers for each end effector link namespace
         markers = []

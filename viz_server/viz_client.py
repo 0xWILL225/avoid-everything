@@ -17,13 +17,12 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 import numpy as np
+import numba as nb
 import torch
 import yaml
 import zmq
 from termcolor import cprint
-import os
 
-print("LOADED NEWW2 VIZ_CLIENT FROM WORKSPACE")
 
 PORT        = 5556
 SERVER_CMD  = "source /opt/ros/humble/setup.bash && python3 -c \"import sys; sys.path.insert(0, '/workspace/viz_server/src'); from viz_server.server import main; main()\""
@@ -190,6 +189,84 @@ def _convert_to_numpy_f32(arr: np.ndarray | torch.Tensor) -> np.ndarray:
     else:
         raise TypeError("_convert_to_numpy_f32: Input must be a NumPy array or Torch tensor")
     return np_arr.astype(np.float32) 
+
+@nb.jit(nopython=True, cache=True)
+def _quaternion_trace_method(matrix, rtol=1e-7, atol=1e-7):
+    """
+    Stolen from the geometrout package.
+    ---
+    This code uses a modification of the algorithm described in:
+    https://d3cw3dd2w32x2b.cloudfront.net/wp-content/uploads/2015/01/matrix-to-quat.pdf
+    which is itself based on the method described here:
+    http://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToQuaternion/
+    Altered to work with the column vector convention instead of row vectors
+
+    Parameters
+    ----------
+    matrix: np.ndarray of shape (3,3) or (4,4) - rotation matrix (3,3) or 
+        homogeneous transformation matrix (4,4)
+
+    Returns
+    -------
+    q: np.ndarray of shape (4,)
+        Quaternion representation of the input rotation matrix, (w, x, y, z) 
+
+    """
+    if matrix.shape == (4, 4):
+        matrix = matrix[:3, :3]
+
+    assert matrix.shape == (3, 3), "Input matrix must be of shape (3, 3) or (4, 4)"
+
+    if not np.allclose(
+        np.dot(matrix, matrix.conj().transpose()),
+        np.eye(3),
+        rtol=rtol,
+        atol=atol,
+        equal_nan=False,
+    ):
+        raise ValueError(
+            "Matrix must be orthogonal, i.e. its transpose should be its inverse"
+        )
+    # Re-implemented `np.isclose` for Numba
+    if np.abs(np.linalg.det(matrix) - 1.0) > atol + rtol:
+        raise ValueError(
+            "Matrix must be special orthogonal i.e. its determinant must be +1.0"
+        )
+    m = (
+        matrix.conj().transpose()
+    )  # This method assumes row-vector and postmultiplication of that vector
+    if m[2, 2] < 0:
+        if m[0, 0] > m[1, 1]:
+            t = 1 + m[0, 0] - m[1, 1] - m[2, 2]
+            q = [m[1, 2] - m[2, 1], t, m[0, 1] + m[1, 0], m[2, 0] + m[0, 2]]
+        else:
+            t = 1 - m[0, 0] + m[1, 1] - m[2, 2]
+            q = [m[2, 0] - m[0, 2], m[0, 1] + m[1, 0], t, m[1, 2] + m[2, 1]]
+    else:
+        if m[0, 0] < -m[1, 1]:
+            t = 1 - m[0, 0] - m[1, 1] + m[2, 2]
+            q = [m[0, 1] - m[1, 0], m[2, 0] + m[0, 2], m[1, 2] + m[2, 1], t]
+        else:
+            t = 1 + m[0, 0] + m[1, 1] + m[2, 2]
+            q = [t, m[1, 2] - m[2, 1], m[2, 0] - m[0, 2], m[0, 1] - m[1, 0]]
+
+    q = np.array(q).astype("float64")
+    q *= 0.5 / np.sqrt(t)
+    return q
+
+@nb.jit(nopython=True, cache=True)
+def _quaternion_to_matrix(q):
+    """
+    Stolen from the geometrout package.
+    """
+    w, x, y, z = q
+    return np.array(
+        [
+            [1 - 2 * (y**2 + z**2), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x**2 + z**2), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x**2 + y**2)],
+        ],
+    )
 
 
 # ====================================================================== #
@@ -428,7 +505,7 @@ def publish_trajectory(
 
 
 def publish_ghost_end_effector(
-    pose: List[float],      # [x y z qx qy qz qw]
+    pose: List[float] | np.ndarray,      # [x y z qx qy qz qw] or 4x4 homogeneous transformation matrix
     *,
     color: List[float] | None = None,
     scale: float = 1.0,
@@ -442,7 +519,8 @@ def publish_ghost_end_effector(
     
     Parameters
     ----------
-    pose : List[float]
+    pose : List[float] | np.ndarray
+        Either a 4x4 homogeneous transformation matrix or a list of 7 elements
         [x, y, z, qx, qy, qz, qw] position and orientation for end effector base
     color : List[float] | None
         [r, g, b] color values in 0-1 range (default green)
@@ -451,6 +529,18 @@ def publish_ghost_end_effector(
     alpha : float
         Alpha/transparency value in 0-1 range (0=transparent, 1=opaque)
     """
+    if isinstance(pose, np.ndarray):
+        if pose.shape == (4, 4):
+            # convert 4x4 transformation matrix to [x, y, z, qx, qy, qz, qw]
+            q_wxyz = _quaternion_trace_method(pose)
+            qw,qx,qy,qz = q_wxyz
+            pose = np.concatenate((pose[:3, 3], [qx, qy, qz, qw])).tolist()
+        elif pose.shape == (7,):
+            pose = pose.tolist()
+        else:
+            raise ValueError("pose must be a 4x4 matrix or a list of 7 elements")
+
+
     if color is None: color = [0, 1, 0]  # Default green color
     _send({"cmd":"ghost_end_effector", "pose":pose, "color":color, "scale":scale, "alpha":alpha})
 
