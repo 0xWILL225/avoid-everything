@@ -38,7 +38,6 @@ data_module_parameters:
   num_obstacle_points: 4096
   num_target_points: 128
   random_scale: 0.015
-  ignore_pretrain_data: true
 shared_parameters:
   prismatic_joint: 0.04
   num_robot_points: 2048

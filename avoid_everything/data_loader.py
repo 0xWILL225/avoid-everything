@@ -28,10 +28,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from robofin.collision import FrankaCollisionSpheres
+# from robofin.collision import FrankaCollisionSpheres
 from robofin.kinematics.numba import franka_arm_link_fk
 from robofin.robot_constants import RealFrankaConstants
-from robofin.samplers import NumpyFrankaSampler
+from robofin.samplers_original import NumpyFrankaSampler
 
 from avoid_everything.dataset import Dataset as MPNDataset
 from avoid_everything.geometry import construct_mixed_point_cloud
@@ -126,7 +126,7 @@ class Base(Dataset):
             with_base_link=True,
         )
 
-        self.cooo = FrankaCollisionSpheres()
+        # self.cooo = FrankaCollisionSpheres()
 
     @property
     def file_exists(self) -> bool:
@@ -711,7 +711,6 @@ class DataModule(pl.LightningDataModule):
         train_batch_size: int,
         val_batch_size: int,
         num_workers: int,
-        ignore_pretrain_data: bool,
     ):
         super().__init__()
         self.data_dir = Path(data_dir)
@@ -725,7 +724,6 @@ class DataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.prismatic_joint = prismatic_joint
         self.random_scale = random_scale
-        self.ignore_pretrain_data = ignore_pretrain_data
         self.action_chunk_length = action_chunk_length
 
     def setup(self, stage: Optional[str] = None):

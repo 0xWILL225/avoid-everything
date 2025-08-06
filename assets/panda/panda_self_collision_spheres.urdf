@@ -273,7 +273,7 @@
       <origin rpy="0 0 0" xyz="0 0 0" />
     </inertial>
   </link>
-  <joint name="right_gripper" type="fixed">
+  <joint name="right_gripper_joint" type="fixed">
     <origin rpy="0 0 2.35619449019" xyz="0 0 0.1" />
       <axis xyz="0 0 1" />
     <parent link="panda_link8" />

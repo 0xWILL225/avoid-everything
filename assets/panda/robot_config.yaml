@@ -4,7 +4,7 @@ robot_config:
   eef_base_link_name: "panda_hand"  # the link that defines the end effector pose
   eef_links: ["panda_link8", "panda_hand", "panda_grasptarget", "right_gripper", "panda_leftfinger", "panda_rightfinger"]
   eef_visual_links: ["panda_hand", "panda_leftfinger", "panda_rightfinger"]
-  arm_visual_links: ["panda_link0", "panda_link1", "panda_link2", "panda_link3", "panda_link4", "panda_link5", "panda_link6", "panda_link7", "panda_hand", "panda_leftfinger", "panda_rightfinger"]  # may define order in which fk poses are returned
+  arm_visual_links: ["panda_link0", "panda_link1", "panda_link2", "panda_link3", "panda_link4", "panda_link5", "panda_link6", "panda_link7", "panda_hand", "panda_leftfinger", "panda_rightfinger"]
   arm_links: ["panda_link0", "panda_link1", "panda_link2", "panda_link3", "panda_link4", "panda_link5", "panda_link6", "panda_link7", "panda_link8", "panda_hand", "panda_grasptarget", "right_gripper", "panda_leftfinger", "panda_rightfinger"]
   auxiliary_joint_names: ["panda_finger_joint1", "panda_finger_joint2"]  # not controlled by neural network
   auxiliary_joints_values: [0.04, 0.04] # default values of auxiliary joints

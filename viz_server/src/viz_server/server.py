@@ -31,6 +31,8 @@ from geometry_msgs.msg import TransformStamped
 from urdf_parser_py.urdf import URDF
 from visualization_msgs.msg import Marker, MarkerArray
 
+print("SERVER.PY HELLOO")
+
 LOCK_FILE = "/tmp/viz_server.lock"
 ZMQ_PORT  = 5556
 
@@ -166,13 +168,15 @@ class VizServer(Node):
                     case "pointcloud": self._handle_pointcloud(hdr, payload)
                     case "ghost_end_effector": self._handle_ghost_end_effector(hdr)
                     case "ghost_robot": self._handle_ghost_robot(hdr)
-                    case "clear_ghost_end_effector": self._handle_clear_ghost_end_effector(hdr)
-                    case "clear_ghost_robot": self._handle_clear_ghost_robot(hdr)
+                    case "clear_ghost_end_effector": self._handle_clear_ghost_end_effector()
+                    case "clear_ghost_robot": self._handle_clear_ghost_robot()
+                    case "obstacles":  self._handle_obstacles(hdr, payload)
+                    case "clear_obstacles": self._handle_clear_obstacles()
                     case "shutdown":   self._handle_shutdown(hdr)
                     case _:            self.sock.send_json({"status": "error", "msg": "unknown cmd"})
             except Exception as exc:     # noqa: BLE001
                 self.get_logger().error(str(exc))
-                self.sock.send_json({"status": "error", "msg": str(exc)})
+                self.sock.send_json({"status": "error", "msg": f"_zmq_loop Exception: {str(exc)}"})
 
     # ====================================================================== #
     # Command handlers
@@ -414,7 +418,7 @@ class VizServer(Node):
         
         self.sock.send_json({"status": "ok"})
 
-    def _handle_clear_ghost_end_effector(self, hdr: Dict) -> None:
+    def _handle_clear_ghost_end_effector() -> None:
         """Clear all ghost end effector markers."""
         # Create DELETE markers for each end effector link namespace
         markers = []
@@ -442,7 +446,7 @@ class VizServer(Node):
         self.marker_pub.publish(MarkerArray(markers=markers))
         self.sock.send_json({"status": "ok"})
 
-    def _handle_clear_ghost_robot(self, hdr: Dict) -> None:
+    def _handle_clear_ghost_robot(self) -> None:
         """Clear all ghost robot markers."""
         # Create DELETE markers for each robot link namespace
         markers = []
@@ -454,6 +458,113 @@ class VizServer(Node):
             m.header.frame_id = self.base_link_name
             m.header.stamp = timestamp
             m.ns = f"ghost_robot_{link_name}"
+            m.action = Marker.DELETEALL
+            markers.append(m)
+        
+        self.marker_pub.publish(MarkerArray(markers=markers))
+        self.sock.send_json({"status": "ok"})
+
+    def _handle_obstacles(self, hdr: Dict, payload: bytes | None) -> None:
+        """Display obstacle cylinders and cuboids."""
+        
+        if payload is None:
+            self.sock.send_json({"status": "error", "msg": "missing payload"})
+            return
+
+        # deserialize the payload
+        end = hdr["cuboid_dims_bytesize"]
+        cuboid_dims = np.frombuffer(payload[:end], hdr["dtype"]).reshape(hdr["cuboid_dims_shape"])
+        start = end
+        end = start + hdr["cuboid_centers_bytesize"]
+        cuboid_centers = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cuboid_centers_shape"])
+        start = end
+        end = start + hdr["cuboid_quaternions_bytesize"]
+        cuboid_quaternions = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cuboid_quaternions_shape"])
+        start = end
+        end = start + hdr["cylinder_radii_bytesize"]
+        cylinder_radii = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cylinder_radii_shape"])
+        start = end
+        end = start + hdr["cylinder_heights_bytesize"]
+        cylinder_heights = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cylinder_heights_shape"])
+        start = end
+        end = start + hdr["cylinder_centers_bytesize"]
+        cylinder_centers = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cylinder_centers_shape"])
+        start = end
+        cylinder_quaternions = np.frombuffer(payload[start:], hdr["dtype"]).reshape(hdr["cylinder_quaternions_shape"])
+
+        markers = []
+
+        obstacle_idx = 0
+
+        # process cuboids
+        for dims, center, quat in zip(cuboid_dims, cuboid_centers, cuboid_quaternions):
+            if len(dims) != 3 or len(center) != 3 or len(quat) != 4:
+                self.sock.send_json({"status": "error", "msg": "Invalid cuboid parameters"}); return
+            
+            m = Marker()
+            m.header.frame_id = self.base_link_name; m.header.stamp = self.get_clock().now().to_msg()
+            m.ns   = "obstacles"
+            m.id   = obstacle_idx; obstacle_idx += 1
+            m.type = Marker.CUBE; m.action = Marker.ADD
+            m.pose.position.x = float(center[0])
+            m.pose.position.y = float(center[1])
+            m.pose.position.z = float(center[2])
+            m.pose.orientation.x = float(quat[1])
+            m.pose.orientation.y = float(quat[2])
+            m.pose.orientation.z = float(quat[3])
+            m.pose.orientation.w = float(quat[0])
+            m.scale.x = float(dims[0])
+            m.scale.y = float(dims[1])
+            m.scale.z = float(dims[2])
+            m.color.r = 0.5; m.color.g = 0.5; m.color.b = 0.5; m.color.a = 1.0
+            
+            markers.append(m)
+
+        # process cylinders
+        for radius, height, center, quat in zip(cylinder_radii, cylinder_heights, cylinder_centers, cylinder_quaternions):
+            if len(center) != 3 or len(quat) != 4:
+                self.sock.send_json({"status": "error", "msg": "Invalid cylinder parameters"}); return
+            
+            m = Marker()
+            m.header.frame_id = self.base_link_name; m.header.stamp = self.get_clock().now().to_msg()
+            m.ns   = "obstacles"
+            m.id   = obstacle_idx; obstacle_idx += 1
+            m.type = Marker.CYLINDER; m.action = Marker.ADD
+            m.pose.position.x = float(center[0])
+            m.pose.position.y = float(center[1])
+            m.pose.position.z = float(center[2])
+            m.pose.orientation.x = float(quat[1])
+            m.pose.orientation.y = float(quat[2])
+            m.pose.orientation.z = float(quat[3])
+            m.pose.orientation.w = float(quat[0])
+            m.scale.x = float(radius)
+            m.scale.y = float(radius)
+            m.scale.z = float(height)
+            m.color.r = 0.5; m.color.g = 0.5; m.color.b = 0.5; m.color.a = 1.0
+            
+            markers.append(m)
+
+        self.marker_pub.publish(MarkerArray(markers=markers))
+        
+        self.sock.send_json({"status": "ok"})
+
+    def _handle_clear_obstacles(self) -> None:
+        """
+        Clear all obstacle markers.
+        
+        Uses the knowledge that there are at most 40 obstacles to a given scene.
+        """
+        # Create DELETE markers for each robot link namespace
+        markers = []
+        timestamp = self.get_clock().now().to_msg()
+        
+        # Clear all robot links
+        for i in range(40):
+            m = Marker()
+            m.header.frame_id = self.base_link_name
+            m.header.stamp = timestamp
+            m.ns = "obstacles"
+            m.id = i
             m.action = Marker.DELETEALL
             markers.append(m)
         

@@ -320,7 +320,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         collision_spheres = self.collision_sampler.compute_spheres(
             rollout_steps, prismatic_joint=self.prismatic_joint
         )
-        for radii, spheres in collision_spheres:
+        for radii, spheres in collision_spheres: # spheres: torch.Tensor [B, num_spheres, 3], 3-dim is x,y,z
             num_spheres = spheres.shape[-2]
             sphere_sequence = spheres.reshape((B, -1, num_spheres, 3))
             sdf_values = torch.minimum(

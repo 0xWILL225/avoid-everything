@@ -38,7 +38,6 @@ data_module_parameters:
   val_trajectory_key: "global_solutions" # Validation dataset uses this key
   num_obstacle_points: 4096
   random_scale: 0.015
-  ignore_pretrain_data: false
   num_target_points: 128
 
 shared_parameters:

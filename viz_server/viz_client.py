@@ -17,11 +17,13 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 import numpy as np
-import torch as T
+import torch
 import yaml
 import zmq
 from termcolor import cprint
 import os
+
+print("LOADED NEWW2 VIZ_CLIENT FROM WORKSPACE")
 
 PORT        = 5556
 SERVER_CMD  = "source /opt/ros/humble/setup.bash && python3 -c \"import sys; sys.path.insert(0, '/workspace/viz_server/src'); from viz_server.server import main; main()\""
@@ -133,8 +135,13 @@ def _send(hdr: dict, payload: bytes | None = None) -> None:
         _sock.send(payload, copy=False)
     resp = _sock.recv_json()
     if not isinstance(resp, dict) or resp.get("status") != "ok":
-        msg = resp.get("msg", "unknown error") if isinstance(resp, dict) else str(resp)
-        cprint(f"Server error: {msg}", "red")
+        if isinstance(resp, dict):
+            msg = resp.get("msg", "unknown error") 
+            cprint(f"Server error: {msg}", "red")
+        else:
+            msg = str(resp)
+            cprint(f"Server unknown non-ok response: {msg}", "red")
+        
 
 
 # ====================================================================== #
@@ -162,11 +169,34 @@ def _load_base_link_name(urdf_path: str) -> str:
         raise RuntimeError(f"Error loading robot_config.yaml: {e}")
 
 
+def _convert_to_numpy_f32(arr: np.ndarray | torch.Tensor) -> np.ndarray:
+    """
+    Convert a NumPy array or Torch tensor to a NumPy float32 array.
+    
+    Parameters
+    ----------
+    arr : np.ndarray or torch.Tensor
+        Input array to convert.
+    
+    Returns
+    -------
+    np.ndarray
+        Converted array with dtype float32.
+    """
+    if isinstance(arr, torch.Tensor):
+        np_arr: np.ndarray = arr.cpu().numpy()
+    elif isinstance(arr, np.ndarray):
+        np_arr: np.ndarray = arr
+    else:
+        raise TypeError("_convert_to_numpy_f32: Input must be a NumPy array or Torch tensor")
+    return np_arr.astype(np.float32) 
+
+
 # ====================================================================== #
 # Public API
 # ====================================================================== #
 def publish_robot_pointcloud(
-    points: np.ndarray | T.Tensor,
+    points: np.ndarray | torch.Tensor,
     *,
     frame: str | None = None,
     name: str = "robot_cloud"
@@ -183,8 +213,7 @@ def publish_robot_pointcloud(
     if frame is None:
         frame = _base_link_name
     
-    arr = points.cpu().numpy() if isinstance(points, T.Tensor) else points
-    arr = arr.astype(np.float32)
+    arr = _convert_to_numpy_f32(points)
     hdr = {
         "cmd":"pointcloud", "frame":frame, "pc_type":"robot_points",
         "dtype":str(arr.dtype), "shape":arr.shape,
@@ -194,7 +223,7 @@ def publish_robot_pointcloud(
 
 
 def publish_target_pointcloud(
-    points: np.ndarray | T.Tensor,
+    points: np.ndarray | torch.Tensor,
     *,
     frame: str | None = None,
     name: str = "target_cloud"
@@ -211,8 +240,7 @@ def publish_target_pointcloud(
     if frame is None:
         frame = _base_link_name
     
-    arr = points.cpu().numpy() if isinstance(points, T.Tensor) else points
-    arr = arr.astype(np.float32)
+    arr = _convert_to_numpy_f32(points)
     hdr = {
         "cmd":"pointcloud", "frame":frame, "pc_type":"target_points",
         "dtype":str(arr.dtype), "shape":arr.shape,
@@ -222,7 +250,7 @@ def publish_target_pointcloud(
 
 
 def publish_obstacle_pointcloud(
-    points: np.ndarray | T.Tensor,
+    points: np.ndarray | torch.Tensor,
     *,
     frame: str | None = None,
     name: str = "obstacle_cloud"
@@ -239,8 +267,7 @@ def publish_obstacle_pointcloud(
     if frame is None:
         frame = _base_link_name
     
-    arr = points.cpu().numpy() if isinstance(points, T.Tensor) else points
-    arr = arr.astype(np.float32)
+    arr = _convert_to_numpy_f32(points)
     hdr = {
         "cmd":"pointcloud", "frame":frame, "pc_type":"obstacle_points",
         "dtype":str(arr.dtype), "shape":arr.shape,
@@ -290,7 +317,7 @@ def clear_obstacle_pointcloud(*, frame: str | None = None, name: str = "obstacle
 
 # Legacy functions for backward compatibility
 def publish_pointcloud(
-    points: np.ndarray | T.Tensor,
+    points: np.ndarray | torch.Tensor,
     *,
     frame: str | None = None,
     pc_type: str = "robot_points",
@@ -318,8 +345,7 @@ def publish_pointcloud(
     if pc_type not in valid_types:
         raise ValueError(f"pc_type must be one of {valid_types}, got '{pc_type}'")
     
-    arr = points.cpu().numpy() if isinstance(points, T.Tensor) else points
-    arr = arr.astype(np.float32)  # Ensure consistent dtype
+    arr = _convert_to_numpy_f32(points)
     hdr = {
         "cmd":"pointcloud", "frame":frame, "pc_type":pc_type,
         "dtype":str(arr.dtype), "shape":arr.shape,
@@ -329,7 +355,7 @@ def publish_pointcloud(
 
 
 def publish_robot_points(
-    points: np.ndarray | T.Tensor,
+    points: np.ndarray | torch.Tensor,
     *,
     frame: str | None = None,
     name: str = "robot_cloud"
@@ -339,7 +365,7 @@ def publish_robot_points(
 
 
 def publish_target_points(
-    points: np.ndarray | T.Tensor,
+    points: np.ndarray | torch.Tensor,
     *,
     frame: str | None = None,
     name: str = "target_cloud"
@@ -349,7 +375,7 @@ def publish_target_points(
 
 
 def publish_obstacle_points(
-    points: np.ndarray | T.Tensor,
+    points: np.ndarray | torch.Tensor,
     *,
     frame: str | None = None,
     name: str = "obstacle_cloud"
@@ -491,6 +517,86 @@ def clear_ghost_robot() -> None:
     published with publish_ghost_robot().
     """
     _send({"cmd":"clear_ghost_robot"})
+
+
+def publish_obstacles(cuboid_dims,
+                      cuboid_centers,
+                      cuboid_quaternions,
+                      cylinder_radii,
+                      cylinder_heights,
+                      cylinder_centers,
+                      cylinder_quaternions) -> None:
+    """
+    Publish cylinder and cuboid obstacles to the viz_server.
+    """
+
+    cub_dims: np.ndarray = _convert_to_numpy_f32(cuboid_dims)
+    cub_centers: np.ndarray = _convert_to_numpy_f32(cuboid_centers)
+    cub_quaternions: np.ndarray = _convert_to_numpy_f32(cuboid_quaternions)
+    cyl_radii: np.ndarray = _convert_to_numpy_f32(cylinder_radii)
+    cyl_heights: np.ndarray = _convert_to_numpy_f32(cylinder_heights)
+    cyl_centers: np.ndarray = _convert_to_numpy_f32(cylinder_centers)
+    cyl_quaternions: np.ndarray = _convert_to_numpy_f32(cylinder_quaternions)
+
+    hdr = {
+        "cmd": "obstacles",
+        "dtype":str(cub_dims.dtype), # assumed all arrays are the same dtype
+        "cuboid_dims_shape": cub_dims.shape,
+        "cuboid_dims_bytesize": cub_dims.size * cub_dims.itemsize,
+        "cuboid_centers_shape": cub_centers.shape,
+        "cuboid_centers_bytesize": cub_centers.size * cub_centers.itemsize,
+        "cuboid_quaternions_shape": cub_quaternions.shape,
+        "cuboid_quaternions_bytesize": cub_quaternions.size * cub_quaternions.itemsize,
+        "cylinder_radii_shape": cyl_radii.shape,
+        "cylinder_radii_bytesize": cyl_radii.size * cyl_radii.itemsize,
+        "cylinder_heights_shape": cyl_heights.shape,
+        "cylinder_heights_bytesize": cyl_heights.size * cyl_heights.itemsize,
+        "cylinder_centers_shape": cyl_centers.shape,
+        "cylinder_centers_bytesize": cyl_centers.size * cyl_centers.itemsize,
+        "cylinder_quaternions_shape": cyl_quaternions.shape,
+    }
+
+    payload = (
+        cub_dims.tobytes() +
+        cub_centers.tobytes() +
+        cub_quaternions.tobytes() +
+        cyl_radii.tobytes() +
+        cyl_heights.tobytes() +
+        cyl_centers.tobytes() +
+        cyl_quaternions.tobytes()
+    )
+
+    _send(hdr, payload)
+
+def publish_obstacles_from_flobs(flobs) -> None:
+    """
+    Publish cylinder and cuboid obstacles to the viz_server.
+
+    Parameters
+    ----------
+    flobs : object containing obstacle data as floating point torch tensors or 
+        numpy arrays.
+    """
+
+    publish_obstacles(
+        cuboid_dims=flobs.cuboid_dims,
+        cuboid_centers=flobs.cuboid_centers,
+        cuboid_quaternions=flobs.cuboid_quaternions,
+        cylinder_radii=flobs.cylinder_radii,
+        cylinder_heights=flobs.cylinder_heights,
+        cylinder_centers=flobs.cylinder_centers,
+        cylinder_quaternions=flobs.cylinder_quaternions
+    )
+
+
+def clear_obstacles() -> None:
+    """
+    Clear all obstacle markers from RViz.
+    
+    This removes all obstacle markers that were previously
+    published with publish_obstacles().
+    """
+    _send({"cmd":"clear_obstacles"})
 
 
 def shutdown() -> None:

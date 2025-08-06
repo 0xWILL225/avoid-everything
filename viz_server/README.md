@@ -8,9 +8,16 @@ The viz_server package is a ROS2 visualization server that bridges ZeroMQ with R
 - **Robot Visualization**: Publish robot joint states and trajectories
 - **Point Cloud Visualization**: Separate topics for robot, target, and obstacle point clouds
 - **Ghost Visualizations**: Display translucent robot meshes at specific poses or configurations
+- **Obstacle Visualizations**: Display cuboid and cylinder obstacles
 - **Universal World Frame**: Automatic static transform from "world" to robot base link for consistent RViz setup
 
 ## Usage
+
+Run Rviz2, preferrably before starting the server.
+
+```
+ros2 run rviz2 rviz2
+```
 
 ### Server
 
