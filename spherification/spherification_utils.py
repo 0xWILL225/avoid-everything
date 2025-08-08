@@ -1197,14 +1197,12 @@ def create_spherified_urdf(urdf_path, spheres_dict, output_path):
     """
     print(f"Creating spherified URDF: {output_path}")
     
-    # Parse the original URDF
     tree = ET.parse(urdf_path)
     root = tree.getroot()
     urdf_dir = Path(urdf_path).parent
     
     total_spheres = 0
     
-    # Process each link
     for link in root.findall('link'):
         link_name = link.get('name')
         
@@ -1215,20 +1213,16 @@ def create_spherified_urdf(urdf_path, spheres_dict, output_path):
         if not spheres:
             continue
         
-        # Remove existing collision elements
         for collision in link.findall('collision'):
             link.remove(collision)
         
-        # Add sphere collision elements
         for i, sphere in enumerate(spheres):
             collision_elem = ET.SubElement(link, 'collision')
             
-            # Create geometry with sphere
             geometry_elem = ET.SubElement(collision_elem, 'geometry')
             sphere_elem = ET.SubElement(geometry_elem, 'sphere')
             sphere_elem.set('radius', str(sphere['radius']))
             
-            # Create origin
             origin_elem = ET.SubElement(collision_elem, 'origin')
             xyz_str = ' '.join(map(str, sphere['origin']))
             origin_elem.set('xyz', xyz_str)
@@ -1236,19 +1230,17 @@ def create_spherified_urdf(urdf_path, spheres_dict, output_path):
             
             total_spheres += 1
     
-    # Convert relative mesh paths to absolute file:// paths
-    for mesh in root.findall('.//mesh'):
-        filename = mesh.get('filename')
-        if filename and not filename.startswith('file://'):
-            if filename.startswith('package://'):
-                # Remove package:// prefix if present
-                filename = filename[len('package://'):]
+    # for mesh in root.findall('.//mesh'):
+    #     filename = mesh.get('filename')
+    #     if filename and not filename.startswith('file://'):
+    #         if filename.startswith('package://'):
+    #             # Remove package:// prefix if present
+    #             filename = filename[len('package://'):]
             
-            # Make absolute path with file:// prefix
-            abs_path = urdf_dir / filename
-            mesh.set('filename', f'file://{abs_path.absolute()}')
+    #         # Make absolute path with file:// prefix
+    #         abs_path = urdf_dir / filename
+    #         mesh.set('filename', f'file://{abs_path.absolute()}')
     
-    # Write the modified URDF
     tree.write(output_path, encoding='utf-8', xml_declaration=True)
     
     print(f"SUCCESS: Created spherified URDF with {total_spheres} spheres")
@@ -1258,7 +1250,10 @@ def create_spherified_urdf(urdf_path, spheres_dict, output_path):
 def create_visualization_urdfs(urdf_path):
     """
     Create visualization URDFs with collision and self-collision spheres.
-    Automatically finds sphere JSON files and creates two output URDFs.
+    Automatically finds sphere JSON files and creates four output URDFs
+    two with relative filepaths, two with absolute filepaths, both groups
+    including one file with the collision spheres and one with the
+    self-collision spheres.
     
     Args:
         urdf_path: Path to original URDF file
@@ -1269,40 +1264,46 @@ def create_visualization_urdfs(urdf_path):
     urdf_dir = urdf_path.parent
     robot_name = urdf_path.stem
     
-    # Look for sphere files in collision_spheres subdirectory
     collision_spheres_dir = urdf_dir / "collision_spheres"
     collision_spheres_path = collision_spheres_dir / "collision_spheres.json"
     self_collision_spheres_path = collision_spheres_dir / "self_collision_spheres.json"
     
     created_files = []
     
-    # Create collision spheres URDF
+    # create collision spheres URDF
     if collision_spheres_path.exists():
         with open(collision_spheres_path, 'r') as f:
             collision_spheres = json.load(f)
         
-        output_path = urdf_dir / f"{robot_name}_collision_spheres.urdf"
+        output_path = urdf_dir / f"{robot_name}_spheres.urdf"
         create_spherified_urdf(urdf_path, collision_spheres, output_path)
         created_files.append(output_path)
     else:
         print(f"WARNING: No collision_spheres.json found in {collision_spheres_dir}")
     
-    # Create self-collision spheres URDF
+    # create self-collision spheres URDF
     if self_collision_spheres_path.exists():
         with open(self_collision_spheres_path, 'r') as f:
             self_collision_spheres = json.load(f)
         
-        output_path = urdf_dir / f"{robot_name}_self_collision_spheres.urdf"
+        output_path = urdf_dir / f"{robot_name}_selfspheres.urdf"
         create_spherified_urdf(urdf_path, self_collision_spheres, output_path)
         created_files.append(output_path)
     else:
         print(f"WARNING: No self_collision_spheres.json found in {collision_spheres_dir}")
     
+    # absolute-path copies
+    abs_files = []
+    for file in created_files:
+      abs_files.append(convert_mesh_paths_to_absolute(file))
+
+    created_files.append(abs_files)  
+
     if created_files:
         print(f"\nSUCCESS: Created {len(created_files)} visualization URDFs")
         for file in created_files:
             print(f"  {file}")
-        print("\nThese URDFs can be loaded directly in RViz and Foxglove Studio!")
+        print("\nThe URDFs ending in `_abs` can be loaded directly in RViz or Foxglove Studio!")
     else:
         print("ERROR: No sphere files found - cannot create visualization URDFs")
     
@@ -1410,7 +1411,7 @@ def convert_mesh_paths_to_absolute(urdf_path, output_path=None):
     urdf_path = Path(urdf_path)
     
     if output_path is None:
-        output_path = urdf_path.parent / f"{urdf_path.stem}_absolute.urdf"
+        output_path = urdf_path.parent / f"{urdf_path.stem}_abs.urdf"
     
     print(f"Converting mesh paths to absolute: {urdf_path} -> {output_path}")
     
@@ -1426,10 +1427,8 @@ def convert_mesh_paths_to_absolute(urdf_path, output_path=None):
         filename = mesh.get('filename')
         if filename and not filename.startswith('file://'):
             if filename.startswith('package://'):
-                # Remove package:// prefix if present
                 filename = filename[len('package://'):]
             
-            # Make absolute path with file:// prefix
             abs_path = urdf_dir / filename
             if abs_path.exists():
                 mesh.set('filename', f'file://{abs_path.absolute()}')
@@ -1437,7 +1436,6 @@ def convert_mesh_paths_to_absolute(urdf_path, output_path=None):
             else:
                 print(f"WARNING: Mesh file not found: {abs_path}")
     
-    # Write the modified URDF
     tree.write(output_path, encoding='utf-8', xml_declaration=True)
     
     print(f"SUCCESS: Converted {converted_count} mesh paths to absolute")

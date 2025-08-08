@@ -1,12 +1,5 @@
 """
 Thin helper that hides the ZeroMQ details; no ROS imports needed.
-
-Example
--------
-import numpy as np, viz_client as V
-V.connect("ur10.urdf")
-V.publish_robot_points(np.random.rand(2_048, 3).astype("f4"))
-V.publish_target_points(np.random.rand(1_024, 3).astype("f4"))
 """
 
 from __future__ import annotations
@@ -14,11 +7,11 @@ from __future__ import annotations
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 import numpy as np
-import numba as nb
 import torch
+from scipy.spatial.transform import Rotation
 import yaml
 import zmq
 from termcolor import cprint
@@ -188,86 +181,7 @@ def _convert_to_numpy_f32(arr: np.ndarray | torch.Tensor) -> np.ndarray:
         np_arr: np.ndarray = arr
     else:
         raise TypeError("_convert_to_numpy_f32: Input must be a NumPy array or Torch tensor")
-    return np_arr.astype(np.float32) 
-
-@nb.jit(nopython=True, cache=True)
-def _quaternion_trace_method(matrix, rtol=1e-7, atol=1e-7):
-    """
-    Stolen from the geometrout package.
-    ---
-    This code uses a modification of the algorithm described in:
-    https://d3cw3dd2w32x2b.cloudfront.net/wp-content/uploads/2015/01/matrix-to-quat.pdf
-    which is itself based on the method described here:
-    http://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToQuaternion/
-    Altered to work with the column vector convention instead of row vectors
-
-    Parameters
-    ----------
-    matrix: np.ndarray of shape (3,3) or (4,4) - rotation matrix (3,3) or 
-        homogeneous transformation matrix (4,4)
-
-    Returns
-    -------
-    q: np.ndarray of shape (4,)
-        Quaternion representation of the input rotation matrix, (w, x, y, z) 
-
-    """
-    if matrix.shape == (4, 4):
-        matrix = matrix[:3, :3]
-
-    assert matrix.shape == (3, 3), "Input matrix must be of shape (3, 3) or (4, 4)"
-
-    if not np.allclose(
-        np.dot(matrix, matrix.conj().transpose()),
-        np.eye(3),
-        rtol=rtol,
-        atol=atol,
-        equal_nan=False,
-    ):
-        raise ValueError(
-            "Matrix must be orthogonal, i.e. its transpose should be its inverse"
-        )
-    # Re-implemented `np.isclose` for Numba
-    if np.abs(np.linalg.det(matrix) - 1.0) > atol + rtol:
-        raise ValueError(
-            "Matrix must be special orthogonal i.e. its determinant must be +1.0"
-        )
-    m = (
-        matrix.conj().transpose()
-    )  # This method assumes row-vector and postmultiplication of that vector
-    if m[2, 2] < 0:
-        if m[0, 0] > m[1, 1]:
-            t = 1 + m[0, 0] - m[1, 1] - m[2, 2]
-            q = [m[1, 2] - m[2, 1], t, m[0, 1] + m[1, 0], m[2, 0] + m[0, 2]]
-        else:
-            t = 1 - m[0, 0] + m[1, 1] - m[2, 2]
-            q = [m[2, 0] - m[0, 2], m[0, 1] + m[1, 0], t, m[1, 2] + m[2, 1]]
-    else:
-        if m[0, 0] < -m[1, 1]:
-            t = 1 - m[0, 0] - m[1, 1] + m[2, 2]
-            q = [m[0, 1] - m[1, 0], m[2, 0] + m[0, 2], m[1, 2] + m[2, 1], t]
-        else:
-            t = 1 + m[0, 0] + m[1, 1] + m[2, 2]
-            q = [t, m[1, 2] - m[2, 1], m[2, 0] - m[0, 2], m[0, 1] - m[1, 0]]
-
-    q = np.array(q).astype("float64")
-    q *= 0.5 / np.sqrt(t)
-    return q
-
-@nb.jit(nopython=True, cache=True)
-def _quaternion_to_matrix(q):
-    """
-    Stolen from the geometrout package.
-    """
-    w, x, y, z = q
-    return np.array(
-        [
-            [1 - 2 * (y**2 + z**2), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-            [2 * (x * y + w * z), 1 - 2 * (x**2 + z**2), 2 * (y * z - w * x)],
-            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x**2 + y**2)],
-        ],
-    )
-
+    return np_arr.astype(np.float32)
 
 # ====================================================================== #
 # Public API
@@ -506,10 +420,12 @@ def publish_trajectory(
 
 def publish_ghost_end_effector(
     pose: List[float] | np.ndarray,      # [x y z qx qy qz qw] or 4x4 homogeneous transformation matrix
+    frame: Optional[str]=None,
+    auxiliary_joint_values: Optional[Dict[str, float]]=None,
     *,
     color: List[float] | None = None,
     scale: float = 1.0,
-    alpha: float = 0.5
+    alpha: float = 0.7
 ) -> None:
     """
     Display a translucent mesh of the entire end effector at an arbitrary pose.
@@ -530,10 +446,14 @@ def publish_ghost_end_effector(
         Alpha/transparency value in 0-1 range (0=transparent, 1=opaque)
     """
     if isinstance(pose, np.ndarray):
+        if pose.ndim == 3:
+            assert pose.shape[0] <= 1, "Batch dim cannot be greater than 1"
+            pose = pose.squeeze()
         if pose.shape == (4, 4):
             # convert 4x4 transformation matrix to [x, y, z, qx, qy, qz, qw]
-            q_wxyz = _quaternion_trace_method(pose)
-            qw,qx,qy,qz = q_wxyz
+            # q_wxyz = _quaternion_trace_method(pose)
+            # qw,qx,qy,qz = q_wxyz
+            qx,qy,qz,qw = Rotation.from_matrix(pose[:3, :3]).as_quat()
             pose = np.concatenate((pose[:3, 3], [qx, qy, qz, qw])).tolist()
         elif pose.shape == (7,):
             pose = pose.tolist()
@@ -541,8 +461,17 @@ def publish_ghost_end_effector(
             raise ValueError("pose must be a 4x4 matrix or a list of 7 elements")
 
 
-    if color is None: color = [0, 1, 0]  # Default green color
-    _send({"cmd":"ghost_end_effector", "pose":pose, "color":color, "scale":scale, "alpha":alpha})
+    if color is None:
+        color = [0, 1, 0]  # default green
+
+    hdr = {"cmd":"ghost_end_effector", "pose":pose, "color":color, "scale":scale, "alpha":alpha}
+    if frame is not None:
+        hdr["frame"] = frame
+    if auxiliary_joint_values is not None:
+        for joint_name, joint_value in auxiliary_joint_values.items():
+            hdr[joint_name] = joint_value
+
+    _send(hdr)
 
 
 def publish_ghost_robot(
@@ -585,8 +514,13 @@ def publish_ghost_robot(
     }
     publish_ghost_robot(config, color=[1, 0, 0], alpha=0.3)
     """
-    if color is None: color = [0, 1, 0]  # Default green color
-    _send({"cmd":"ghost_robot", "configuration":configuration, "color":color, "scale":scale, "alpha":alpha})
+    if color is None:
+        color = [0, 1, 0]  # default green
+    _send({"cmd":"ghost_robot", 
+           "configuration":configuration, 
+           "color":color, 
+           "scale":scale, 
+           "alpha":alpha})
 
 
 def clear_ghost_end_effector() -> None:
@@ -615,7 +549,8 @@ def publish_obstacles(cuboid_dims,
                       cylinder_radii,
                       cylinder_heights,
                       cylinder_centers,
-                      cylinder_quaternions) -> None:
+                      cylinder_quaternions,
+                      color: Optional[List[float]]=None) -> None:
     """
     Publish cylinder and cuboid obstacles to the viz_server.
     """
@@ -628,8 +563,12 @@ def publish_obstacles(cuboid_dims,
     cyl_centers: np.ndarray = _convert_to_numpy_f32(cylinder_centers)
     cyl_quaternions: np.ndarray = _convert_to_numpy_f32(cylinder_quaternions)
 
+    if color is None:
+        color = [0.8, 0.5, 0.6]  # light-red default
+
     hdr = {
         "cmd": "obstacles",
+        "color": color,
         "dtype":str(cub_dims.dtype), # assumed all arrays are the same dtype
         "cuboid_dims_shape": cub_dims.shape,
         "cuboid_dims_bytesize": cub_dims.size * cub_dims.itemsize,

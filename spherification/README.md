@@ -163,6 +163,10 @@ Use standard Blender controls:
 - **Delete**: Press `X` > Delete to remove spheres
 - **Add**: Use the `add_sphere(x,y,z,radius)` function or duplicate existing ones (make sure they follow the same naming scheme, `{link_name}_{sphere_type}_{index}`, where `sphere_type` is either `collision` or `self_collision`)
 
+Tip: Try your best to have as few unique sphere radii as possible. In Avoid Everything, the spheres are grouped by radius, and the fewer unique radii there are, the faster can batched signed distance field computations on the spheres be completed.
+E.g. instead of having one sphere have radius 0.046 and another 0.047, make them both have either 0.046 or 0.047 -> fewer unique radii.
+
+Radii are currently rounded to 3 decimals in this fork of Avoid Everything, so storing any further decimals is superfluous.
 
 ### 6. Save Your Changes
 
@@ -187,16 +191,18 @@ create_visualization_urdfs('path/to/robot.urdf')
 ```
 
 This will create:
-- `robot_collision_spheres.urdf` - URDF with collision spheres
-- `robot_self_collision_spheres.urdf` - URDF with self-collision spheres
+- `robot_spheres.urdf` - URDF with collision spheres
+- `robot_selfspheres.urdf` - URDF with self-collision spheres
+- `robot_spheres_abs.urdf` - URDF with collision spheres and absolute filepaths
+- `robot_selfspheres_abs.urdf` - URDF with self-collision spheres and absolute filepaths
 
-Both URDFs use absolute file paths and can be loaded directly in **RViz** and **Foxglove Studio** for visualization!
+The URDFs with absolute file paths can be loaded directly in **RViz** and **Foxglove Studio** for visualization! For visualization with **viz_server**, the regular URDFs with relative paths should be used.
 
 To visualize in RViz or Foxglove, you can do the following:
 
 In one terminal, set the urdf contents as an environment variable and run the robot state publisher:
 ```
-export SPHERIZED_ROBOT_DESCRIPTION="$(cat assets/gp7/gp7_prepared.urdf)"
+export SPHERIZED_ROBOT_DESCRIPTION="$(cat assets/robot/robot_spheres_abs.urdf)"
 ros2 run robot_state_publisher robot_state_publisher --ros-args -p robot_description:="$SPHERIZED_ROBOT_DESCRIPTION"
 ```
 

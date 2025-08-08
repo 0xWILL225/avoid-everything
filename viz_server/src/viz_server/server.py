@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Union
 
 import fasteners
 import numpy as np
@@ -20,16 +20,19 @@ import rclpy
 import yaml
 import zmq
 from rclpy.node import Node
-from scipy.spatial.transform import Rotation
 from rclpy.qos import QoSProfile
+from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import JointState, PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
 from std_msgs.msg import Header
 from termcolor import cprint
 from tf2_ros import StaticTransformBroadcaster
 from geometry_msgs.msg import TransformStamped
-from urdf_parser_py.urdf import URDF
+from urdf_parser_py.urdf import URDF  # should maybe use urchin instead
 from visualization_msgs.msg import Marker, MarkerArray
+
+from robofin.robots import Robot
+from spherification.spherification_utils import convert_mesh_paths_to_absolute
 
 LOCK_FILE = "/tmp/viz_server.lock"
 ZMQ_PORT  = 5556
@@ -63,36 +66,15 @@ class VizServer(Node):
         # ------------------------------------------------------------------ #
         # URDF parsing -> movable joint list
         # ------------------------------------------------------------------ #
-        self.urdf_path: str    = urdf_path
-        self.robot: URDF       = URDF.from_xml_file(urdf_path)
-        self.joint_names: list = [j.name for j in self.robot.joints if j.type != "fixed"]
-        self.num_dof: int      = len(self.joint_names)
+        self.urdf_path: str = urdf_path
+        self.robot = Robot(self.urdf_path)
+        self.abs_urdf_path = "/tmp/abs_urdf.urdf"
+        convert_mesh_paths_to_absolute(self.urdf_path, self.abs_urdf_path)
+        self.urdf_robot: URDF = URDF.from_xml_file(self.abs_urdf_path)
+        self.joint_names: list = [j.name for j in self.urdf_robot.joints if j.type != "fixed"]
+        self.num_dof: int = len(self.joint_names)
         cprint(f"Robot DoF ({self.num_dof}): {self.joint_names}", "cyan")
-        
-        # ------------------------------------------------------------------ #
-        # Load link config for base link name
-        # ------------------------------------------------------------------ #
-        try:
-            self.base_link_name: str = self._load_base_link_name()
-            cprint(f"Base link: {self.base_link_name}", "cyan")
-        except Exception as e:
-            cprint(f"Error loading base link name: {e}", "red")
-            sys.exit(1)
-            
-        try:
-            self.eef_base_link_name: str = self._load_eef_base_link_name()
-            cprint(f"End effector base link: {self.eef_base_link_name}", "cyan")
-        except Exception as e:
-            cprint(f"Error loading end effector base link name: {e}", "red")
-            sys.exit(1)
-            
-        try:
-            self.eef_visual_links: list = self._load_eef_visual_links()
-            cprint(f"End effector visual links: {self.eef_visual_links}", "cyan")
-        except Exception as e:
-            cprint(f"Error loading end effector visual links: {e}", "red")
-            sys.exit(1)
-        
+
         # Parse mimic joint relationships
         self.mimic_joints = self._parse_mimic_joints()
         if self.mimic_joints:
@@ -104,7 +86,7 @@ class VizServer(Node):
         qos = QoSProfile(depth=1)
         self.js_pub     = self.create_publisher(JointState,   "/joint_states",  qos)
         self.marker_pub = self.create_publisher(MarkerArray,  "/viz/markers",   qos)
-        
+
         # Multiple point cloud publishers for different types
         self.pc_robot_pub    = self.create_publisher(PointCloud2, "/viz/robot_points",    qos)
         self.pc_target_pub   = self.create_publisher(PointCloud2, "/viz/target_points",   qos)
@@ -112,7 +94,7 @@ class VizServer(Node):
 
         # Static transform broadcaster for world frame
         self.static_tf_broadcaster = StaticTransformBroadcaster(self)
-        
+
         # tunables
         self.rate_hz          = hz
         self.segment_duration = segment_dur
@@ -122,8 +104,10 @@ class VizServer(Node):
         # ------------------------------------------------------------------ #
         # Start robot_state_publisher immediately
         # ------------------------------------------------------------------ #
+        
         cprint("Starting robot_state_publisher...", "green")
-        xml = Path(self.urdf_path).read_text()
+        xml = Path(self.abs_urdf_path).read_text()
+
         self.rsp_proc = subprocess.Popen(
             [
                 "ros2", "run", "robot_state_publisher", "robot_state_publisher",
@@ -170,7 +154,7 @@ class VizServer(Node):
                     case "clear_ghost_robot": self._handle_clear_ghost_robot()
                     case "obstacles":  self._handle_obstacles(hdr, payload)
                     case "clear_obstacles": self._handle_clear_obstacles()
-                    case "shutdown":   self._handle_shutdown(hdr)
+                    case "shutdown":   self._handle_shutdown()
                     case _:            self.sock.send_json({"status": "error", "msg": "unknown cmd"})
             except Exception as exc:     # noqa: BLE001
                 self.get_logger().error(str(exc))
@@ -241,11 +225,11 @@ class VizServer(Node):
             self.sock.send_json({"status": "error", "msg": "missing payload"}); return
         
         pts     = np.frombuffer(payload, hdr["dtype"]).reshape(hdr["shape"])   # type: ignore[arg-type]
-        frame   = hdr.get("frame", self.base_link_name)  # Default to base link
+        frame_id   = hdr.get("frame_id", self.robot.base_link_name)  # Default to base link
         pc_type = hdr.get("pc_type", "robot_points")     # Default type
         
         # Create simple XYZ point cloud
-        header = Header(frame_id=frame, stamp=self.get_clock().now().to_msg())
+        header = Header(frame_id=frame_id, stamp=self.get_clock().now().to_msg())
         cloud  = pc2.create_cloud_xyz32(header, pts)
         
         # Publish to the appropriate topic based on type
@@ -261,88 +245,68 @@ class VizServer(Node):
         self.sock.send_json({"status": "ok"})
 
     def _handle_ghost_end_effector(self, hdr: Dict) -> None:
-        """Spawn a translucent mesh for a URDF link."""
-        link_names = self.eef_visual_links
-        pose = hdr["pose"] # [x, y, z, qx, qy, qz, qw]
-        color = hdr.get("color", [0, 1, 0]); scale = hdr.get("scale", 1.0)
-        alpha = hdr.get("alpha", 0.5)
+        """Spawn a translucent mesh for the visual links of the end-effector."""
+        [x, y, z, qx, qy, qz, qw] = hdr["pose"]
+        frame: Union[str, None] = hdr.get("frame", None) # end-effector link name that has pose
+        color: list[float] = hdr.get("color", [0, 1, 0])
+        scale: float = hdr.get("scale", 1.0)
+        alpha: float = hdr.get("alpha", 0.5)
 
-        # Ensure we have properly resolved mimic joints in latest_joint_state
-        if self.latest_joint_state:
-            # Make sure we have all joints with default values for missing ones
-            complete_joint_state = {}
-            for joint_name in self.joint_names:
-                complete_joint_state[joint_name] = self.latest_joint_state.get(joint_name, 0.0)
-            self.latest_joint_state = self._resolve_mimic_joints(complete_joint_state)
+        auxiliary_joint_values = {}
+        for joint_name in self.robot.auxiliary_joint_names:
+            auxiliary_joint_values[joint_name] = \
+                hdr.get(joint_name, self.robot.auxiliary_joint_defaults[joint_name])
+
+        if frame is None:
+            frame = self.robot.tcp_link_name
+        assert isinstance(frame, str)
+        if frame not in self.robot.fixed_eef_link_transforms:
+            raise ValueError(f"Frame {frame} is not a valid end effector frame (must be a link fixed to tcp)")
+
+        pose = np.eye(4)
+        # pose[:3, :3] = _quaternion_to_matrix([qw, qx, qy, qz])
+        pose[:3, :3] = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
+        pose[:3, 3] = [x,y,z]
+
+        np.set_printoptions(precision=3, suppress=True)
+
+        visual_fk = self.robot.eef_visual_fk(pose, frame, auxiliary_joint_values)
 
         markers = []
+        for link_name, link_pose in visual_fk.items():
 
-        link = self.robot.link_map.get(self.eef_base_link_name)
-        if not (link and link.visual and hasattr(link.visual, 'geometry') and link.visual.geometry and hasattr(link.visual.geometry, 'filename')):
-            self.sock.send_json({"status": "error", "msg": "link/mesh not found"}); return
-        mesh_uri = link.visual.geometry.filename
-
-        # Apply visual transform for the base link
-        base_pose = pose[:]
-        if link.visual and hasattr(link.visual, 'origin') and link.visual.origin:
-            visual_transform = self._get_visual_transform(link.visual.origin)
-            base_pose = self._apply_transform(base_pose, visual_transform)
-
-        m = Marker()
-        m.header.frame_id = self.base_link_name; m.header.stamp = self.get_clock().now().to_msg()
-        m.ns   = f"ghost_ee_{self.eef_base_link_name}"
-        m.type = Marker.MESH_RESOURCE; m.mesh_resource = mesh_uri; m.action = Marker.ADD
-        m.pose.position.x, m.pose.position.y, m.pose.position.z = base_pose[:3]
-        m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, m.pose.orientation.w = base_pose[3:]
-        m.scale.x = m.scale.y = m.scale.z = scale
-        m.color.r = float(color[0])
-        m.color.g = float(color[1])
-        m.color.b = float(color[2])
-        m.color.a = float(alpha)
-
-        markers.append(m)
-
-        for link_name in link_names:
-            if link_name == self.eef_base_link_name:
-                continue
-
-            # Find link pose based on robot description and current joint state
-            link = self.robot.link_map.get(link_name)
+            link = self.urdf_robot.link_map.get(link_name)
             if not link:
-                self.sock.send_json({"status": "error", "msg": f"link {link_name} not found"}); return
+                self.sock.send_json({"status": "error", "msg": f"link {link_name} not found"})
+                return
             
-            # Compute relative transform from eef_base_link to this link
-            relative_transform = self._compute_link_transform(self.eef_base_link_name, link_name)
-            
-            # Apply relative transform to the base pose  
-            link_pose = self._apply_transform(pose, relative_transform)
-            
-            # Apply visual transform for this link
-            if link.visual and hasattr(link.visual, 'origin') and link.visual.origin:
-                visual_transform = self._get_visual_transform(link.visual.origin)
-                link_pose = self._apply_transform(link_pose, visual_transform)
-            
-            # Get mesh for this link
-            if not (link.visual and hasattr(link.visual, 'geometry') and link.visual.geometry and hasattr(link.visual.geometry, 'filename')):
-                continue  # Skip links without visual mesh
+            if not (link.visual and hasattr(link.visual, 'geometry')
+                    and link.visual.geometry
+                    and hasattr(link.visual.geometry, 'filename')):
+                # cprint(f"_handle_ghost_end_effector(): Skipping link without visual mesh: {link_name}", "yellow")
+                continue
             link_mesh_uri = link.visual.geometry.filename
+
+            qx,qy,qz,qw = Rotation.from_matrix(link_pose[:3, :3]).as_quat()
+            x,y,z = link_pose[:3, 3]
             
             m = Marker()
-            m.header.frame_id = self.base_link_name; m.header.stamp = self.get_clock().now().to_msg()
+            m.header.frame_id = self.robot.base_link_name
+            m.header.stamp = self.get_clock().now().to_msg()
             m.ns   = f"ghost_ee_{link_name}"
-            m.type = Marker.MESH_RESOURCE; m.mesh_resource = link_mesh_uri; m.action = Marker.ADD
-            m.pose.position.x, m.pose.position.y, m.pose.position.z = link_pose[:3]
-            m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, m.pose.orientation.w = link_pose[3:]
+            m.type = Marker.MESH_RESOURCE
+            m.mesh_resource = link_mesh_uri
+            m.action = Marker.ADD
+            m.pose.position.x, m.pose.position.y, m.pose.position.z = x,y,z
+            m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, m.pose.orientation.w = qx,qy,qz,qw
             m.scale.x = m.scale.y = m.scale.z = scale
             m.color.r = float(color[0])
             m.color.g = float(color[1])
             m.color.b = float(color[2])
             m.color.a = float(alpha)
-
             markers.append(m)
 
         self.marker_pub.publish(MarkerArray(markers=markers))
-        
         self.sock.send_json({"status": "ok"})
 
     def _handle_ghost_robot(self, hdr: Dict) -> None:
@@ -370,7 +334,7 @@ class VizServer(Node):
         timestamp = self.get_clock().now().to_msg()
         
         # Iterate through all robot links with visual geometry
-        for link_name, link in self.robot.link_map.items():
+        for link_name, link in self.urdf_robot.link_map.items():
             # Skip links without visual geometry
             if not (link.visual and hasattr(link.visual, 'geometry') and 
                     link.visual.geometry and hasattr(link.visual.geometry, 'filename')):
@@ -380,7 +344,7 @@ class VizServer(Node):
             mesh_uri = link.visual.geometry.filename
             
             # Compute transform from base link to this link
-            link_transform = self._compute_link_transform(self.base_link_name, link_name)
+            link_transform = self._compute_link_transform(self.robot.base_link_name, link_name)
             
             # Convert transform to pose [x, y, z, qx, qy, qz, qw]
             position = link_transform[:3, 3]
@@ -395,7 +359,7 @@ class VizServer(Node):
             
             # Create marker for this link
             m = Marker()
-            m.header.frame_id = self.base_link_name
+            m.header.frame_id = self.robot.base_link_name
             m.header.stamp = timestamp
             m.ns = f"ghost_robot_{link_name}"
             m.type = Marker.MESH_RESOURCE
@@ -422,25 +386,14 @@ class VizServer(Node):
         markers = []
         timestamp = self.get_clock().now().to_msg()
         
-        # Clear base end effector link
-        m = Marker()
-        m.header.frame_id = self.base_link_name
-        m.header.stamp = timestamp
-        m.ns = f"ghost_ee_{self.eef_base_link_name}"
-        m.action = Marker.DELETEALL
-        markers.append(m)
-        
-        # Clear all end effector visual links
-        for link_name in self.eef_visual_links:
-            if link_name == self.eef_base_link_name:
-                continue
+        for link_name in self.robot.eef_visual_link_names:
             m = Marker()
-            m.header.frame_id = self.base_link_name
+            m.header.frame_id = self.robot.base_link_name
             m.header.stamp = timestamp
             m.ns = f"ghost_ee_{link_name}"
             m.action = Marker.DELETEALL
             markers.append(m)
-        
+
         self.marker_pub.publish(MarkerArray(markers=markers))
         self.sock.send_json({"status": "ok"})
 
@@ -451,9 +404,9 @@ class VizServer(Node):
         timestamp = self.get_clock().now().to_msg()
         
         # Clear all robot links
-        for link_name in self.robot.link_map.keys():
+        for link_name in self.urdf_robot.link_map.keys():
             m = Marker()
-            m.header.frame_id = self.base_link_name
+            m.header.frame_id = self.robot.base_link_name
             m.header.stamp = timestamp
             m.ns = f"ghost_robot_{link_name}"
             m.action = Marker.DELETEALL
@@ -465,6 +418,8 @@ class VizServer(Node):
     def _handle_obstacles(self, hdr: Dict, payload: bytes | None) -> None:
         """Display obstacle cylinders and cuboids."""
         
+        color: list[float] = hdr.get("color", [0.8, 0.5, 0.6]) # light-red default
+    
         if payload is None:
             self.sock.send_json({"status": "error", "msg": "missing payload"})
             return
@@ -500,7 +455,8 @@ class VizServer(Node):
                 self.sock.send_json({"status": "error", "msg": "Invalid cuboid parameters"}); return
             
             m = Marker()
-            m.header.frame_id = self.base_link_name; m.header.stamp = self.get_clock().now().to_msg()
+            m.header.frame_id = self.robot.base_link_name
+            m.header.stamp = self.get_clock().now().to_msg()
             m.ns   = "obstacles"
             m.id   = obstacle_idx; obstacle_idx += 1
             m.type = Marker.CUBE; m.action = Marker.ADD
@@ -514,7 +470,10 @@ class VizServer(Node):
             m.scale.x = float(dims[0])
             m.scale.y = float(dims[1])
             m.scale.z = float(dims[2])
-            m.color.r = 0.5; m.color.g = 0.5; m.color.b = 0.5; m.color.a = 1.0
+            m.color.r = float(color[0])
+            m.color.g = float(color[1])
+            m.color.b = float(color[2])
+            m.color.a = 1.0
             
             markers.append(m)
 
@@ -524,7 +483,8 @@ class VizServer(Node):
                 self.sock.send_json({"status": "error", "msg": "Invalid cylinder parameters"}); return
             
             m = Marker()
-            m.header.frame_id = self.base_link_name; m.header.stamp = self.get_clock().now().to_msg()
+            m.header.frame_id = self.robot.base_link_name
+            m.header.stamp = self.get_clock().now().to_msg()
             m.ns   = "obstacles"
             m.id   = obstacle_idx; obstacle_idx += 1
             m.type = Marker.CYLINDER; m.action = Marker.ADD
@@ -538,12 +498,13 @@ class VizServer(Node):
             m.scale.x = float(radius)
             m.scale.y = float(radius)
             m.scale.z = float(height)
-            m.color.r = 0.5; m.color.g = 0.5; m.color.b = 0.5; m.color.a = 1.0
-            
+            m.color.r = float(color[0])
+            m.color.g = float(color[1])
+            m.color.b = float(color[2])
+            m.color.a = 1.0
             markers.append(m)
 
         self.marker_pub.publish(MarkerArray(markers=markers))
-        
         self.sock.send_json({"status": "ok"})
 
     def _handle_clear_obstacles(self) -> None:
@@ -555,11 +516,11 @@ class VizServer(Node):
         # Create DELETE markers for each robot link namespace
         markers = []
         timestamp = self.get_clock().now().to_msg()
-        
+
         # Clear all robot links
         for i in range(40):
             m = Marker()
-            m.header.frame_id = self.base_link_name
+            m.header.frame_id = self.robot.base_link_name
             m.header.stamp = timestamp
             m.ns = "obstacles"
             m.id = i
@@ -569,7 +530,7 @@ class VizServer(Node):
         self.marker_pub.publish(MarkerArray(markers=markers))
         self.sock.send_json({"status": "ok"})
 
-    def _handle_shutdown(self, hdr: Dict) -> None:
+    def _handle_shutdown(self) -> None:
         """Handle shutdown command - clean up and exit."""
         cprint("Shutdown command received", "yellow")
         self.sock.send_json({"status": "ok"})
@@ -664,7 +625,7 @@ class VizServer(Node):
         # Set header
         transform.header.stamp = self.get_clock().now().to_msg()
         transform.header.frame_id = "world"
-        transform.child_frame_id = self.base_link_name
+        transform.child_frame_id = self.robot.base_link_name
         
         # Identity transform (no translation or rotation)
         transform.transform.translation.x = 0.0
@@ -677,7 +638,7 @@ class VizServer(Node):
         
         # Send the transform
         self.static_tf_broadcaster.sendTransform(transform)
-        cprint(f"Published static transform: world -> {self.base_link_name}", "green")
+        cprint(f"Published static transform: world -> {self.robot.base_link_name}", "green")
 
     def _load_base_link_name(self) -> str:
         """Load base link name from robot_config.yaml in the same directory as URDF."""
@@ -696,48 +657,6 @@ class VizServer(Node):
                 raise ValueError(f"base_link_name not found in robot_config.yaml at {config_path}")
             
             return base_link
-            
-        except Exception as e:
-            raise RuntimeError(f"Error loading robot_config.yaml: {e}")
-
-    def _load_eef_base_link_name(self) -> str:
-        """Load end effector base link name from robot_config.yaml in the same directory as URDF."""
-        try:
-            urdf_dir = Path(self.urdf_path).parent
-            config_path = urdf_dir / "robot_config.yaml"
-            
-            if not config_path.exists():
-                raise FileNotFoundError(f"robot_config.yaml not found at {config_path}")
-            
-            with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
-            
-            eef_base_link_name = config.get("robot_config", {}).get("eef_base_link_name")
-            if not eef_base_link_name:
-                raise ValueError(f"eef_base_link_name not found in robot_config.yaml at {config_path}")
-            
-            return eef_base_link_name
-
-        except Exception as e:
-            raise RuntimeError(f"Error loading robot_config.yaml: {e}")
-
-    def _load_eef_visual_links(self) -> list:
-        """Load end effector visual links from robot_config.yaml in the same directory as URDF."""
-        try:
-            urdf_dir = Path(self.urdf_path).parent
-            config_path = urdf_dir / "robot_config.yaml"
-            
-            if not config_path.exists():
-                raise FileNotFoundError(f"robot_config.yaml not found at {config_path}")
-            
-            with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
-            
-            eef_visual_links = config.get("robot_config", {}).get("eef_visual_links", [])
-            if not eef_visual_links:
-                raise ValueError(f"eef_visual_links not found or empty in robot_config.yaml at {config_path}")
-            
-            return eef_visual_links
             
         except Exception as e:
             raise RuntimeError(f"Error loading robot_config.yaml: {e}")
@@ -771,7 +690,7 @@ class VizServer(Node):
             
             # Find joint connecting parent to child
             joint = None
-            for j in self.robot.joints:
+            for j in self.urdf_robot.joints:
                 if j.parent == parent_link and j.child == child_link:
                     joint = j
                     break
@@ -795,7 +714,7 @@ class VizServer(Node):
         """
         # Build adjacency graph from joints
         graph = {}
-        for joint in self.robot.joints:
+        for joint in self.urdf_robot.joints:
             if joint.parent not in graph:
                 graph[joint.parent] = []
             if joint.child not in graph:
@@ -901,7 +820,7 @@ class VizServer(Node):
         """
         mimic_joints = {}
         
-        for joint in self.robot.joints:
+        for joint in self.urdf_robot.joints:
             if hasattr(joint, 'mimic') and joint.mimic:
                 # Handle the case where multiplier might be None
                 multiplier = getattr(joint.mimic, 'multiplier', None)
