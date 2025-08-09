@@ -327,11 +327,9 @@ def publish_pointcloud(
     pc_type : point cloud type - 'robot_points', 'target_points', or 'obstacle_points'
     name   : logical name of the cloud (colors set in RViz config)
     """
-    # Use base link as default frame
     if frame is None:
         frame = _base_link_name
     
-    # Validate pc_type
     valid_types = ["robot_points", "target_points", "obstacle_points"]
     if pc_type not in valid_types:
         raise ValueError(f"pc_type must be one of {valid_types}, got '{pc_type}'")
@@ -343,17 +341,6 @@ def publish_pointcloud(
         "name":name
     }
     _send(hdr, arr.tobytes())
-
-
-def publish_robot_points(
-    points: np.ndarray | torch.Tensor,
-    *,
-    frame: str | None = None,
-    name: str = "robot_cloud"
-) -> None:
-    """DEPRECATED: Use publish_robot_pointcloud() instead."""
-    publish_robot_pointcloud(points, frame=frame, name=name)
-
 
 def publish_target_points(
     points: np.ndarray | torch.Tensor,
@@ -374,6 +361,23 @@ def publish_obstacle_points(
     """DEPRECATED: Use publish_obstacle_pointcloud() instead."""
     publish_obstacle_pointcloud(points, frame=frame, name=name)
 
+def publish_config(config: np.ndarray | torch.Tensor | list[float]) -> None:
+    """
+    Show the robot in a single configuration. Auxiliary joints take their 
+    default values.
+
+    Parameters
+    ----------
+    config (np.ndarray): Main joint angles in radians (excluding auxiliary joints)
+    """
+    if isinstance(config, np.ndarray) or isinstance(config, torch.Tensor):
+        if config.ndim == 2:
+            assert config.shape[0] == 1
+            config = config.squeeze()
+        config = config.tolist()
+    
+    assert isinstance(config, list)
+    _send({"cmd":"config", "config": config})
 
 def publish_joints(joints: Dict[str, float]) -> None:
     """
@@ -383,16 +387,17 @@ def publish_joints(joints: Dict[str, float]) -> None:
     ----------
     joints : Dict[str, float]
         Joint angles in radians. Must include all movable joints OR parent joints
-        of mimic relationships. Mimic joints (like panda_finger_joint2) are 
-        automatically computed from their parent joints (like panda_finger_joint1).
+        of mimic relationships. Mimic joints are automatically computed from 
+        their parent joints.
         
     Examples
     --------
     # Traditional: set all joints including mimics
-    publish_joints({"joint1": 0.0, "finger_joint1": 0.02, "finger_joint2": 0.02})
+    publish_joints({"joint1": 0.0, "mimic_joint1": 0.02, "mimic_joint2": 0.02})
     
-    # Better: only set parent joints, mimics computed automatically  
-    publish_joints({"joint1": 0.0, "finger_joint1": 0.02})
+    # Alternative: only set parent joints, mimics computed automatically  
+    publish_joints({"joint1": 0.0, "mimic_joint1": 0.02}) # mimic_joint2 
+    resolved in server.
     """
     _send({"cmd":"joints", "joints":joints})
 
@@ -419,12 +424,11 @@ def publish_trajectory(
 
 
 def publish_ghost_end_effector(
-    pose: List[float] | np.ndarray,      # [x y z qx qy qz qw] or 4x4 homogeneous transformation matrix
+    pose: List[float] | np.ndarray,
     frame: Optional[str]=None,
     auxiliary_joint_values: Optional[Dict[str, float]]=None,
     *,
     color: List[float] | None = None,
-    scale: float = 1.0,
     alpha: float = 0.7
 ) -> None:
     """
@@ -440,8 +444,6 @@ def publish_ghost_end_effector(
         [x, y, z, qx, qy, qz, qw] position and orientation for end effector base
     color : List[float] | None
         [r, g, b] color values in 0-1 range (default green)
-    scale : float
-        Scale factor for the mesh
     alpha : float
         Alpha/transparency value in 0-1 range (0=transparent, 1=opaque)
     """
@@ -451,8 +453,6 @@ def publish_ghost_end_effector(
             pose = pose.squeeze()
         if pose.shape == (4, 4):
             # convert 4x4 transformation matrix to [x, y, z, qx, qy, qz, qw]
-            # q_wxyz = _quaternion_trace_method(pose)
-            # qw,qx,qy,qz = q_wxyz
             qx,qy,qz,qw = Rotation.from_matrix(pose[:3, :3]).as_quat()
             pose = np.concatenate((pose[:3, 3], [qx, qy, qz, qw])).tolist()
         elif pose.shape == (7,):
@@ -464,7 +464,7 @@ def publish_ghost_end_effector(
     if color is None:
         color = [0, 1, 0]  # default green
 
-    hdr = {"cmd":"ghost_end_effector", "pose":pose, "color":color, "scale":scale, "alpha":alpha}
+    hdr = {"cmd":"ghost_end_effector", "pose":pose, "color":color, "alpha":alpha}
     if frame is not None:
         hdr["frame"] = frame
     if auxiliary_joint_values is not None:
@@ -475,10 +475,10 @@ def publish_ghost_end_effector(
 
 
 def publish_ghost_robot(
-    configuration: Dict[str, float],
+    config: np.ndarray | torch.Tensor | List[float],
+    auxiliary_joint_values: Optional[Dict[str, float]]=None,
     *,
     color: List[float] | None = None,
-    scale: float = 1.0,
     alpha: float = 0.5
 ) -> None:
     """
@@ -489,38 +489,31 @@ def publish_ghost_robot(
     
     Parameters
     ----------
-    configuration : Dict[str, float]
-        Joint angles in radians for all robot joints. Must include all movable joints
-        OR parent joints of mimic relationships. Mimic joints are automatically computed.
+    config (List[float] | np.ndarray): Configuration of main joints
+    auxiliary_joint_values (Dict[str, float]): Auxiliary joint values (optional)
     color : List[float] | None
         [r, g, b] color values in 0-1 range (default green)
-    scale : float
-        Scale factor for all meshes
     alpha : float
         Alpha/transparency value in 0-1 range (0=transparent, 1=opaque)
-        
-    Examples
-    --------
-    # Show robot in a specific configuration
-    config = {
-        "joint1": 0.0,
-        "joint2": -0.785,
-        "joint3": 0.0,
-        "joint4": -2.356,
-        "joint5": 0.0,
-        "joint6": 1.571,
-        "joint7": 0.785,
-        "finger_joint1": 0.02,
-    }
-    publish_ghost_robot(config, color=[1, 0, 0], alpha=0.3)
+
     """
     if color is None:
         color = [0, 1, 0]  # default green
-    _send({"cmd":"ghost_robot", 
-           "configuration":configuration, 
+
+    if isinstance(config, np.ndarray) or isinstance(config, torch.Tensor):
+        if config.ndim == 2:
+            assert config.shape[0] == 1
+            config = config.squeeze()
+        config = config.tolist()
+
+    hdr = {"cmd":"ghost_robot", 
+           "config":config, 
            "color":color, 
-           "scale":scale, 
-           "alpha":alpha})
+           "alpha":alpha}
+    if auxiliary_joint_values is not None:
+        for joint_name, joint_value in auxiliary_joint_values.items():
+            hdr[joint_name] = joint_value
+    _send(hdr)
 
 
 def clear_ghost_end_effector() -> None:

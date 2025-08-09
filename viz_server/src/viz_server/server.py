@@ -99,7 +99,6 @@ class VizServer(Node):
         self.rate_hz          = hz
         self.segment_duration = segment_dur
         self.rsp_proc         = None         # robot_state_publisher subprocess
-        self.latest_joint_state = {}         # Track latest joint values
 
         # ------------------------------------------------------------------ #
         # Start robot_state_publisher immediately
@@ -146,6 +145,7 @@ class VizServer(Node):
                 match hdr.get("cmd"):
                     case "ping":       self.sock.send_json({"status": "ok"})
                     case "joints":     self._handle_joints(hdr)
+                    case "config":     self._handle_config(hdr)
                     case "trajectory": self._handle_trajectory(hdr)
                     case "pointcloud": self._handle_pointcloud(hdr, payload)
                     case "ghost_end_effector": self._handle_ghost_end_effector(hdr)
@@ -165,29 +165,25 @@ class VizServer(Node):
     # ====================================================================== #
     def _handle_joints(self, hdr: Dict) -> None:
         """Publish one JointState message."""
-        joints = hdr["joints"]
-        
-        # Apply mimic joint resolution first
-        resolved_joints = self._resolve_mimic_joints(joints)
-        
-        # Now check if we have all required joints after mimic resolution
-        if set(resolved_joints) != set(self.joint_names):
-            missing = set(self.joint_names) - set(resolved_joints)
-            extra = set(resolved_joints) - set(self.joint_names)
-            error_msg = f"joint set mismatch after mimic resolution. Missing: {missing}, Extra: {extra}"
-            self.sock.send_json({"status": "error", "msg": error_msg})
-            return
-            
-        self._publish_joints(joints)  # Use original joints, _publish_joints will resolve mimics again
+        self._publish_joints(hdr["joints"])
         self.sock.send_json({"status": "ok"})
-    
+
+    def _handle_config(self, hdr: Dict) -> None:
+        """
+        Publish one JointState message, based on main joint config vector. 
+        Auxiliary joints take default values.
+        """
+        config = hdr["config"]
+        joints = dict(zip(self.robot.main_joint_names, config))
+        for joint_name, joint_value in self.robot.auxiliary_joint_defaults.items():
+            joints[joint_name] = joint_value
+
+        self._publish_joints(joints)
+        self.sock.send_json({"status": "ok"})
+
     def _publish_joints(self, joints: Dict[str, float]) -> None:
         """Publish joint state without ZMQ response (for internal use)."""
-        # Apply mimic joint relationships before storing
         resolved_joints = self._resolve_mimic_joints(joints)
-        
-        # Store latest joint state for FK calculations
-        self.latest_joint_state = resolved_joints.copy()
         
         js               = JointState()
         js.header.stamp  = self.get_clock().now().to_msg()
@@ -248,8 +244,7 @@ class VizServer(Node):
         """Spawn a translucent mesh for the visual links of the end-effector."""
         [x, y, z, qx, qy, qz, qw] = hdr["pose"]
         frame: Union[str, None] = hdr.get("frame", None) # end-effector link name that has pose
-        color: list[float] = hdr.get("color", [0, 1, 0])
-        scale: float = hdr.get("scale", 1.0)
+        color: list[float] = hdr.get("color", [0.0, 1.0, 0.0])
         alpha: float = hdr.get("alpha", 0.5)
 
         auxiliary_joint_values = {}
@@ -264,11 +259,8 @@ class VizServer(Node):
             raise ValueError(f"Frame {frame} is not a valid end effector frame (must be a link fixed to tcp)")
 
         pose = np.eye(4)
-        # pose[:3, :3] = _quaternion_to_matrix([qw, qx, qy, qz])
         pose[:3, :3] = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
         pose[:3, 3] = [x,y,z]
-
-        np.set_printoptions(precision=3, suppress=True)
 
         visual_fk = self.robot.eef_visual_fk(pose, frame, auxiliary_joint_values)
 
@@ -283,7 +275,6 @@ class VizServer(Node):
             if not (link.visual and hasattr(link.visual, 'geometry')
                     and link.visual.geometry
                     and hasattr(link.visual.geometry, 'filename')):
-                # cprint(f"_handle_ghost_end_effector(): Skipping link without visual mesh: {link_name}", "yellow")
                 continue
             link_mesh_uri = link.visual.geometry.filename
 
@@ -299,7 +290,7 @@ class VizServer(Node):
             m.action = Marker.ADD
             m.pose.position.x, m.pose.position.y, m.pose.position.z = x,y,z
             m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, m.pose.orientation.w = qx,qy,qz,qw
-            m.scale.x = m.scale.y = m.scale.z = scale
+            m.scale.x = m.scale.y = m.scale.z = 1.0
             m.color.r = float(color[0])
             m.color.g = float(color[1])
             m.color.b = float(color[2])
@@ -310,79 +301,59 @@ class VizServer(Node):
         self.sock.send_json({"status": "ok"})
 
     def _handle_ghost_robot(self, hdr: Dict) -> None:
-        """Display a translucent mesh of the entire robot at a given configuration."""
-        configuration = hdr["configuration"]
-        color = hdr.get("color", [0, 1, 0])
-        scale = hdr.get("scale", 1.0)
-        alpha = hdr.get("alpha", 0.5)
+        """Spawn a translucent mesh for the visual links of the robot."""
+        config: list[float] = hdr["config"]
+        color: list[float] = hdr.get("color", [0.0, 1.0, 0.0])
+        alpha: float = hdr.get("alpha", 0.5)
 
-        # Validate and resolve joints
-        resolved_joints = self._resolve_mimic_joints(configuration)
-        
-        # Check if we have all required joints
-        if set(resolved_joints) != set(self.joint_names):
-            missing = set(self.joint_names) - set(resolved_joints)
-            extra = set(resolved_joints) - set(self.joint_names)
-            error_msg = f"joint set mismatch after mimic resolution. Missing: {missing}, Extra: {extra}"
-            self.sock.send_json({"status": "error", "msg": error_msg})
-            return
+        auxiliary_joint_values = {}
+        for joint_name in self.robot.auxiliary_joint_names:
+            auxiliary_joint_values[joint_name] = \
+                hdr.get(joint_name, self.robot.auxiliary_joint_defaults[joint_name])
 
-        # Store the configuration as the current joint state for FK calculations
-        self.latest_joint_state = resolved_joints.copy()
+        visual_fk = self.robot.visual_fk(np.array(config), auxiliary_joint_values)
+        assert isinstance(visual_fk, dict)
 
         markers = []
-        timestamp = self.get_clock().now().to_msg()
-        
-        # Iterate through all robot links with visual geometry
-        for link_name, link in self.urdf_robot.link_map.items():
-            # Skip links without visual geometry
-            if not (link.visual and hasattr(link.visual, 'geometry') and 
-                    link.visual.geometry and hasattr(link.visual.geometry, 'filename')):
+        for link_name, link_pose in visual_fk.items():
+
+
+            link = self.urdf_robot.link_map.get(link_name)
+            if not link:
+                self.sock.send_json({"status": "error", "msg": f"link {link_name} not found"})
+                return
+
+            if not (link.visual and hasattr(link.visual, 'geometry')
+                    and link.visual.geometry
+                    and hasattr(link.visual.geometry, 'filename')):
                 continue
-                
-            # Get mesh URI
-            mesh_uri = link.visual.geometry.filename
-            
-            # Compute transform from base link to this link
-            link_transform = self._compute_link_transform(self.robot.base_link_name, link_name)
-            
-            # Convert transform to pose [x, y, z, qx, qy, qz, qw]
-            position = link_transform[:3, 3]
-            rotation = Rotation.from_matrix(link_transform[:3, :3])
-            quat = rotation.as_quat()  # [qx, qy, qz, qw]
-            link_pose = [position[0], position[1], position[2], quat[0], quat[1], quat[2], quat[3]]
-            
-            # Apply visual transform for this link
-            if link.visual and hasattr(link.visual, 'origin') and link.visual.origin:
-                visual_transform = self._get_visual_transform(link.visual.origin)
-                link_pose = self._apply_transform(link_pose, visual_transform)
-            
-            # Create marker for this link
+            link_mesh_uri = link.visual.geometry.filename
+
+            squeezed_pose = link_pose.squeeze()
+            qx,qy,qz,qw = Rotation.from_matrix(squeezed_pose[:3, :3]).as_quat()
+            x,y,z = squeezed_pose[:3, 3]
+
             m = Marker()
             m.header.frame_id = self.robot.base_link_name
-            m.header.stamp = timestamp
-            m.ns = f"ghost_robot_{link_name}"
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns   = f"ghost_robot_{link_name}"
             m.type = Marker.MESH_RESOURCE
-            m.mesh_resource = mesh_uri
+            m.mesh_resource = link_mesh_uri
             m.action = Marker.ADD
-            m.pose.position.x, m.pose.position.y, m.pose.position.z = link_pose[:3]
-            m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, m.pose.orientation.w = link_pose[3:]
-            m.scale.x = m.scale.y = m.scale.z = scale
+            m.pose.position.x, m.pose.position.y, m.pose.position.z = x,y,z
+            m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, m.pose.orientation.w = qx,qy,qz,qw
+            m.scale.x = m.scale.y = m.scale.z = 1.0
             m.color.r = float(color[0])
             m.color.g = float(color[1])
             m.color.b = float(color[2])
             m.color.a = float(alpha)
-            
             markers.append(m)
 
-        # Publish all markers
         self.marker_pub.publish(MarkerArray(markers=markers))
-        
         self.sock.send_json({"status": "ok"})
 
     def _handle_clear_ghost_end_effector(self) -> None:
         """Clear all ghost end effector markers."""
-        # Create DELETE markers for each end effector link namespace
         markers = []
         timestamp = self.get_clock().now().to_msg()
         
@@ -399,12 +370,11 @@ class VizServer(Node):
 
     def _handle_clear_ghost_robot(self) -> None:
         """Clear all ghost robot markers."""
-        # Create DELETE markers for each robot link namespace
         markers = []
         timestamp = self.get_clock().now().to_msg()
         
         # Clear all robot links
-        for link_name in self.urdf_robot.link_map.keys():
+        for link_name in self.robot.arm_visual_link_names:
             m = Marker()
             m.header.frame_id = self.robot.base_link_name
             m.header.stamp = timestamp
@@ -417,33 +387,38 @@ class VizServer(Node):
 
     def _handle_obstacles(self, hdr: Dict, payload: bytes | None) -> None:
         """Display obstacle cylinders and cuboids."""
-        
         color: list[float] = hdr.get("color", [0.8, 0.5, 0.6]) # light-red default
-    
         if payload is None:
             self.sock.send_json({"status": "error", "msg": "missing payload"})
             return
 
         # deserialize the payload
         end = hdr["cuboid_dims_bytesize"]
-        cuboid_dims = np.frombuffer(payload[:end], hdr["dtype"]).reshape(hdr["cuboid_dims_shape"])
+        cuboid_dims = np.frombuffer(
+            payload[:end], hdr["dtype"]).reshape(hdr["cuboid_dims_shape"])
         start = end
         end = start + hdr["cuboid_centers_bytesize"]
-        cuboid_centers = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cuboid_centers_shape"])
+        cuboid_centers = np.frombuffer(
+            payload[start:end], hdr["dtype"]).reshape(hdr["cuboid_centers_shape"])
         start = end
         end = start + hdr["cuboid_quaternions_bytesize"]
-        cuboid_quaternions = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cuboid_quaternions_shape"])
+        cuboid_quaternions = np.frombuffer(
+            payload[start:end], hdr["dtype"]).reshape(hdr["cuboid_quaternions_shape"])
         start = end
         end = start + hdr["cylinder_radii_bytesize"]
-        cylinder_radii = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cylinder_radii_shape"])
+        cylinder_radii = np.frombuffer(
+            payload[start:end], hdr["dtype"]).reshape(hdr["cylinder_radii_shape"])
         start = end
         end = start + hdr["cylinder_heights_bytesize"]
-        cylinder_heights = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cylinder_heights_shape"])
+        cylinder_heights = np.frombuffer(
+            payload[start:end], hdr["dtype"]).reshape(hdr["cylinder_heights_shape"])
         start = end
         end = start + hdr["cylinder_centers_bytesize"]
-        cylinder_centers = np.frombuffer(payload[start:end], hdr["dtype"]).reshape(hdr["cylinder_centers_shape"])
+        cylinder_centers = np.frombuffer(
+            payload[start:end], hdr["dtype"]).reshape(hdr["cylinder_centers_shape"])
         start = end
-        cylinder_quaternions = np.frombuffer(payload[start:], hdr["dtype"]).reshape(hdr["cylinder_quaternions_shape"])
+        cylinder_quaternions = np.frombuffer(
+            payload[start:], hdr["dtype"]).reshape(hdr["cylinder_quaternions_shape"])
 
         markers = []
 
@@ -452,7 +427,8 @@ class VizServer(Node):
         # process cuboids
         for dims, center, quat in zip(cuboid_dims, cuboid_centers, cuboid_quaternions):
             if len(dims) != 3 or len(center) != 3 or len(quat) != 4:
-                self.sock.send_json({"status": "error", "msg": "Invalid cuboid parameters"}); return
+                self.sock.send_json({"status": "error", "msg": "Invalid cuboid parameters"})
+                return
             
             m = Marker()
             m.header.frame_id = self.robot.base_link_name
@@ -480,7 +456,8 @@ class VizServer(Node):
         # process cylinders
         for radius, height, center, quat in zip(cylinder_radii, cylinder_heights, cylinder_centers, cylinder_quaternions):
             if len(center) != 3 or len(quat) != 4:
-                self.sock.send_json({"status": "error", "msg": "Invalid cylinder parameters"}); return
+                self.sock.send_json({"status": "error", "msg": "Invalid cylinder parameters"})
+                return
             
             m = Marker()
             m.header.frame_id = self.robot.base_link_name
@@ -513,12 +490,10 @@ class VizServer(Node):
         
         Uses the knowledge that there are at most 40 obstacles to a given scene.
         """
-        # Create DELETE markers for each robot link namespace
         markers = []
         timestamp = self.get_clock().now().to_msg()
 
-        # Clear all robot links
-        for i in range(40):
+        for i in range(40): # at most 40 obstacles in Avoid Everything
             m = Marker()
             m.header.frame_id = self.robot.base_link_name
             m.header.stamp = timestamp
@@ -526,7 +501,7 @@ class VizServer(Node):
             m.id = i
             m.action = Marker.DELETEALL
             markers.append(m)
-        
+
         self.marker_pub.publish(MarkerArray(markers=markers))
         self.sock.send_json({"status": "ok"})
 
@@ -534,20 +509,16 @@ class VizServer(Node):
         """Handle shutdown command - clean up and exit."""
         cprint("Shutdown command received", "yellow")
         self.sock.send_json({"status": "ok"})
-        
+
         # Give ZMQ time to send the response
         time.sleep(0.1)
-        
         self._cleanup()
-        
-        # Force exit
         import os
         os._exit(0)
 
     def _cleanup(self) -> None:
         """Clean up resources."""
         cprint("Cleaning up viz_server...", "yellow")
-        
         # First, close ZMQ resources to stop incoming requests
         if hasattr(self, 'sock'):
             try:
@@ -560,7 +531,7 @@ class VizServer(Node):
             except:
                 pass
         
-        # Now handle the subprocess
+        # handle the subprocess
         if hasattr(self, 'rsp_proc') and self.rsp_proc:
             cprint("Terminating robot_state_publisher...", "yellow")
             try:
@@ -595,7 +566,7 @@ class VizServer(Node):
             except Exception as e:
                 cprint(f"Error terminating robot_state_publisher: {e}", "red")
         
-        # Final cleanup of any remaining robot_state_publisher processes via pkill
+        # final cleanup of any remaining robot_state_publisher processes via pkill
         try:
             result = subprocess.run(["pkill", "-f", "robot_state_publisher"], 
                                   capture_output=True, text=True)
@@ -604,7 +575,6 @@ class VizServer(Node):
         except:
             pass
                 
-        # Release lock
         if hasattr(self, 'lock'):
             try:
                 self.lock.release()
@@ -622,12 +592,10 @@ class VizServer(Node):
         """Publish static transform from world frame to robot base link."""
         transform = TransformStamped()
         
-        # Set header
         transform.header.stamp = self.get_clock().now().to_msg()
         transform.header.frame_id = "world"
         transform.child_frame_id = self.robot.base_link_name
         
-        # Identity transform (no translation or rotation)
         transform.transform.translation.x = 0.0
         transform.transform.translation.y = 0.0
         transform.transform.translation.z = 0.0
@@ -636,181 +604,8 @@ class VizServer(Node):
         transform.transform.rotation.z = 0.0
         transform.transform.rotation.w = 1.0
         
-        # Send the transform
         self.static_tf_broadcaster.sendTransform(transform)
         cprint(f"Published static transform: world -> {self.robot.base_link_name}", "green")
-
-    def _load_base_link_name(self) -> str:
-        """Load base link name from robot_config.yaml in the same directory as URDF."""
-        try:
-            urdf_dir = Path(self.urdf_path).parent
-            config_path = urdf_dir / "robot_config.yaml"
-            
-            if not config_path.exists():
-                raise FileNotFoundError(f"robot_config.yaml not found at {config_path}")
-            
-            with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
-            
-            base_link = config.get("robot_config", {}).get("base_link_name")
-            if not base_link:
-                raise ValueError(f"base_link_name not found in robot_config.yaml at {config_path}")
-            
-            return base_link
-            
-        except Exception as e:
-            raise RuntimeError(f"Error loading robot_config.yaml: {e}")
-
-    def _compute_link_transform(self, from_link: str, to_link: str) -> np.ndarray:
-        """
-        Compute transform from from_link to to_link using current joint states.
-        
-        This shows how URDF traversal works:
-        1. Find path between links through URDF tree
-        2. Apply joint values along the path 
-        3. Compose transforms
-        
-        Returns: 4x4 homogeneous transform matrix
-        """
-        if from_link == to_link:
-            return np.eye(4)
-        
-        # Find kinematic path from from_link to to_link
-        path = self._find_kinematic_path(from_link, to_link)
-        if not path:
-            cprint(f"No kinematic path from {from_link} to {to_link}", "red")
-            return np.eye(4)
-        
-        # Compute transform along the path
-        transform = np.eye(4)
-        
-        for i in range(len(path) - 1):
-            parent_link = path[i]
-            child_link = path[i + 1]
-            
-            # Find joint connecting parent to child
-            joint = None
-            for j in self.urdf_robot.joints:
-                if j.parent == parent_link and j.child == child_link:
-                    joint = j
-                    break
-            
-            if not joint:
-                continue
-                
-            # Get joint transform
-            joint_transform = self._get_joint_transform(joint)
-            transform = transform @ joint_transform
-            
-        return transform
-    
-    def _find_kinematic_path(self, from_link: str, to_link: str) -> List[str]:
-        """
-        Find kinematic path between two links in URDF tree.
-        
-        This is how you traverse the URDF:
-        - Use joint.parent and joint.child to build the tree
-        - Find path using graph traversal
-        """
-        # Build adjacency graph from joints
-        graph = {}
-        for joint in self.urdf_robot.joints:
-            if joint.parent not in graph:
-                graph[joint.parent] = []
-            if joint.child not in graph:
-                graph[joint.child] = []
-            graph[joint.parent].append(joint.child)
-            graph[joint.child].append(joint.parent)  # Bidirectional
-        
-        # BFS to find path
-        if from_link not in graph or to_link not in graph:
-            return []
-            
-        queue = [(from_link, [from_link])]
-        visited = set()
-        
-        while queue:
-            current, path = queue.pop(0)
-            if current == to_link:
-                return path
-                
-            if current in visited:
-                continue
-            visited.add(current)
-            
-            for neighbor in graph.get(current, []):
-                if neighbor not in visited:
-                    queue.append((neighbor, path + [neighbor]))
-        
-        return []  # No path found
-    
-    def _get_joint_transform(self, joint) -> np.ndarray:
-        """
-        Get 4x4 transform for a joint given current joint state.
-        
-        This shows how to apply joint values:
-        1. Start with joint.origin (fixed transform)
-        2. Apply current joint value based on joint type and axis
-        """
-        # Start with joint's fixed transform (origin)
-        transform = np.eye(4)
-        
-        if hasattr(joint, 'origin') and joint.origin:
-            # Apply translation
-            if hasattr(joint.origin, 'xyz') and joint.origin.xyz:
-                transform[:3, 3] = joint.origin.xyz
-            
-            # Apply rotation (RPY to rotation matrix)
-            if hasattr(joint.origin, 'rpy') and joint.origin.rpy:
-                r = Rotation.from_euler('xyz', joint.origin.rpy)
-                transform[:3, :3] = r.as_matrix()
-        
-        # Apply current joint value
-        if joint.name in self.latest_joint_state:
-            joint_value = self.latest_joint_state[joint.name]
-            
-            if joint.type == 'revolute' or joint.type == 'continuous':
-                # Rotation around axis
-                if hasattr(joint, 'axis') and joint.axis:
-                    axis = np.array(joint.axis)
-                    axis_rotation = Rotation.from_rotvec(joint_value * axis)
-                    # Apply rotation to existing transform
-                    joint_rot = np.eye(4)
-                    joint_rot[:3, :3] = axis_rotation.as_matrix()
-                    transform = transform @ joint_rot
-                    
-            elif joint.type == 'prismatic':
-                # Translation along axis  
-                if hasattr(joint, 'axis') and joint.axis:
-                    axis = np.array(joint.axis)
-                    translation = joint_value * axis
-                    joint_trans = np.eye(4)
-                    joint_trans[:3, 3] = translation
-                    transform = transform @ joint_trans
-        
-        return transform
-    
-    def _apply_transform(self, base_pose: List[float], transform: np.ndarray) -> List[float]:
-        """
-        Apply a 4x4 transform to a pose [x,y,z,qx,qy,qz,qw].
-        
-        Returns transformed pose in same format.
-        """
-        # Convert pose to 4x4 matrix
-        base_matrix = np.eye(4)
-        base_matrix[:3, 3] = base_pose[:3]  # translation
-        quat = base_pose[3:]  # [qx, qy, qz, qw]
-        base_matrix[:3, :3] = Rotation.from_quat(quat).as_matrix()
-        
-        # Apply transform
-        result_matrix = base_matrix @ transform
-        
-        # Convert back to pose format
-        position = result_matrix[:3, 3]
-        rotation = Rotation.from_matrix(result_matrix[:3, :3])
-        quat = rotation.as_quat()  # [qx, qy, qz, qw]
-        
-        return [position[0], position[1], position[2], quat[0], quat[1], quat[2], quat[3]]
 
     def _parse_mimic_joints(self) -> Dict[str, Dict]:
         """
@@ -819,25 +614,22 @@ class VizServer(Node):
         Returns dict: {mimic_joint_name: {parent: str, multiplier: float, offset: float}}
         """
         mimic_joints = {}
-        
         for joint in self.urdf_robot.joints:
             if hasattr(joint, 'mimic') and joint.mimic:
                 # Handle the case where multiplier might be None
                 multiplier = getattr(joint.mimic, 'multiplier', None)
                 if multiplier is None:
                     multiplier = 1.0
-                
                 offset = getattr(joint.mimic, 'offset', None)
                 if offset is None:
                     offset = 0.0
-                
                 mimic_info = {
                     'parent': joint.mimic.joint,
                     'multiplier': multiplier,
                     'offset': offset
                 }
                 mimic_joints[joint.name] = mimic_info
-                
+
         return mimic_joints
 
     def _resolve_mimic_joints(self, joints: Dict[str, float]) -> Dict[str, float]:
@@ -848,17 +640,14 @@ class VizServer(Node):
         If only mimic joint is specified, we compute parent value (reverse mimic).
         """
         resolved = joints.copy()
-        
         for mimic_joint, mimic_info in self.mimic_joints.items():
             parent_joint = mimic_info['parent']
             multiplier = mimic_info['multiplier']
             offset = mimic_info['offset']
-            
             parent_in_joints = parent_joint in resolved
             mimic_in_joints = mimic_joint in resolved
-            
+
             if parent_in_joints and mimic_in_joints:
-                # Both specified - check for consistency and use parent
                 parent_val = resolved[parent_joint]
                 mimic_val = resolved[mimic_joint]
                 expected_mimic = parent_val * multiplier + offset
@@ -867,44 +656,28 @@ class VizServer(Node):
                     cprint(f"Warning: Inconsistent mimic joint values for {mimic_joint}. " +
                           f"Expected {expected_mimic:.4f} from {parent_joint}={parent_val:.4f}, " +
                           f"got {mimic_val:.4f}. Using parent value.", "yellow")
-                
+
                 resolved[mimic_joint] = expected_mimic
-                
+
             elif parent_in_joints and not mimic_in_joints:
-                # Only parent specified - compute mimic
                 resolved[mimic_joint] = resolved[parent_joint] * multiplier + offset
-                
+
             elif not parent_in_joints and mimic_in_joints:
-                # Only mimic specified - compute parent (reverse mimic)
                 if multiplier != 0:
                     resolved[parent_joint] = (resolved[mimic_joint] - offset) / multiplier
                 else:
                     cprint(f"Warning: Cannot reverse mimic for {mimic_joint} (multiplier=0)", "yellow")
-                    
-            elif not parent_in_joints and not mimic_in_joints:
-                # Neither specified - this will be caught by the joint set validation
-                pass
-                
-        return resolved
 
-    def _get_visual_transform(self, visual_origin) -> np.ndarray:
-        """
-        Get 4x4 transform from a visual origin element.
-        
-        Visual origins specify how the mesh should be transformed relative to the link frame.
-        """
-        transform = np.eye(4)
-        
-        # Apply translation
-        if hasattr(visual_origin, 'xyz') and visual_origin.xyz:
-            transform[:3, 3] = visual_origin.xyz
-        
-        # Apply rotation (RPY to rotation matrix)
-        if hasattr(visual_origin, 'rpy') and visual_origin.rpy:
-            r = Rotation.from_euler('xyz', visual_origin.rpy)
-            transform[:3, :3] = r.as_matrix()
-        
-        return transform
+            elif not parent_in_joints and not mimic_in_joints:
+                pass
+
+        if set(resolved) != set(self.joint_names):
+            missing = set(self.joint_names) - set(resolved)
+            extra = set(resolved) - set(self.joint_names)
+            error_msg = f"joint set mismatch after mimic resolution. Missing: {missing}, Extra: {extra}"
+            self.sock.send_json({"status": "error", "msg": error_msg})
+
+        return resolved
 
 # ---------------------------------------------------------------------- #
 # CLI entry-point
