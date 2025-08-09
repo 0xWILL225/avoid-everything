@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Callable
 
+from tqdm.auto import tqdm, trange
 import h5py
 import numpy as np
 from geometrout.primitive import Cuboid, CuboidArray, Cylinder, CylinderArray
-# from old.robots import FrankaRobot
-from tqdm.auto import tqdm, trange
+from geometrout.transform import SE3
 
-
+from robofin.robots import Robot
 from avoid_everything.type_defs import PlanningProblem
 
 
@@ -102,7 +102,8 @@ class UnindexedKeyedData:
     Otherwise use KeyedData
     """
 
-    def __init__(self, key, file, mode="r"):
+    def __init__(self, robot: Robot, key, file, mode="r"):
+        self.robot = robot
         self.file = file
         assert self.file.id, "HDF5 file must be open to access data"
         self.key = key
@@ -217,7 +218,9 @@ class UnindexedKeyedData:
         Gets the planning problem for a given planning problem index in the format expected by RoboMetrics.
         """
         problem = self.problem(pidx)
-        goal_pose = FrankaRobot.fk(problem.target, eff_frame=eff_frame)
+        eef_pose = self.robot.fk(problem.target, link_name=eff_frame)
+        assert isinstance(eef_pose, np.ndarray)
+        goal_pose = SE3.from_matrix(eef_pose.squeeze())
         cuboids = []
         cylinders = []
         assert problem.obstacles is not None
@@ -556,7 +559,8 @@ class KeyedData(UnindexedKeyedData):
 
 
 class Dataset:
-    def __init__(self, file_path: str | Path, mode: str = "r"):
+    def __init__(self, robot: Robot, file_path: str | Path, mode: str = "r"):
+        self.robot = robot
         self.file_path = file_path
         self.file = h5py.File(str(self.file_path), mode)
         self.keys = list(self.file.keys())
@@ -583,7 +587,7 @@ class Dataset:
         Rebuilds the index for a given expert name.
         """
         N = 0
-        keyed_data = UnindexedKeyedData(key, self.file, self.mode)
+        keyed_data = UnindexedKeyedData(self.robot, key, self.file, self.mode)
         for pidx in trange(len(self), desc="Counting states"):
             N += keyed_data.expert_length(pidx)
         index = np.zeros((N, 2), dtype=int)
@@ -607,6 +611,7 @@ class Dataset:
     @classmethod
     def merge(
         cls,
+        robot: Robot,
         destination: str,
         paths_to_merge: list[str],
         rebuild_index: bool = True,
@@ -623,7 +628,7 @@ class Dataset:
         N = 0
         logging.info("Checking datasets")
         for p in tqdm(paths_to_merge, desc="Assembling keys"):
-            with Dataset(p) as f:
+            with Dataset(robot, p) as f:
                 if keys is None:
                     keys = set(
                         [key for key in f.keys if INDEX_SPECIAL_TOKEN not in key]
@@ -665,7 +670,7 @@ class Dataset:
                             ]
                             fsf += len(chunk)
                     gsf += n
-        with Dataset(destination, "r+") as g:
+        with Dataset(robot, destination, "r+") as g:
             for key in keys_to_index:
                 if rebuild_index:
                     g.rebuild_index(key)
@@ -675,6 +680,7 @@ class Dataset:
     @classmethod
     def merge_with_unequal_sizes(
         cls,
+        robot: Robot,
         destination: str,
         paths_to_merge: list[str],
         rebuild_index: bool = True,
@@ -692,7 +698,7 @@ class Dataset:
         logging.info("Checking datasets")
         shapes = None
         for p in tqdm(paths_to_merge, desc="Assembling keys"):
-            with Dataset(p) as f:
+            with Dataset(robot, p) as f:
                 if keys is None:
                     keys = set(
                         [key for key in f.keys if INDEX_SPECIAL_TOKEN not in key]
@@ -764,7 +770,7 @@ class Dataset:
                             ds[assign_to] = f[key][assign_from]
                             fsf += len(chunk)
                     gsf += n
-        with Dataset(destination, "r+") as g:
+        with Dataset(robot, destination, "r+") as g:
             for key in keys_to_index:
                 if rebuild_index:
                     g.rebuild_index(key)
@@ -802,7 +808,7 @@ class Dataset:
                     for chunk in index_chunks:
                         ds[sf : sf + len(chunk), ...] = self.file[key][chunk, ...]
                         sf += len(chunk)
-            with Dataset(path, "r+") as g:
+            with Dataset(self.robot, path, "r+") as g:
                 for key in index_keys:
                     if rebuild_index:
                         logging.info(f"Rebuilding index for {key}")
@@ -845,7 +851,7 @@ class Dataset:
                             data_chunk, counts, axis=0
                         )
                         sf += len(chunk)
-            with Dataset(path, "r+") as g:
+            with Dataset(self.robot, path, "r+") as g:
                 for key in index_keys:
                     if rebuild_index:
                         logging.info(f"Rebuilding index for {key}")
@@ -946,7 +952,7 @@ class Dataset:
         if WELL_INDEXED not in self.file[key].attrs:
             logging.warning(f"Must rebuild index for {key} to maintain trustworthiness")
         if not self.file[key].attrs.get(WELL_INDEXED, False):
-            return UnindexedKeyedData(key, self.file, self.mode)
+            return UnindexedKeyedData(self.robot, key, self.file, self.mode)
         return KeyedData(key, self.file, self.mode)
 
     def close(self):

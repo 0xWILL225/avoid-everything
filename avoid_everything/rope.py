@@ -21,10 +21,10 @@ from avoid_everything.type_defs import DatasetType
 class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
     def __init__(
         self,
+        robot: Robot,
         num_robot_points: int,
         point_match_loss_weight: float,
         collision_loss_weight: float,
-        prismatic_joint: float,
         train_batch_size: int,
         disable_viz: bool,
         collision_loss_margin: float,
@@ -33,13 +33,14 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
         warmup_steps: int,
         decay_rate: float,
         pc_bounds: list[list[float]],
+        action_chunk_length: int,
         hard_negative_ratio: float = 0.2,
     ):
         super().__init__(
+            robot,
             num_robot_points,
             point_match_loss_weight,
             collision_loss_weight,
-            prismatic_joint,
             train_batch_size,
             disable_viz,
             collision_loss_margin,
@@ -48,6 +49,7 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
             warmup_steps,
             decay_rate,
             pc_bounds,
+            action_chunk_length,
         )
         self.hard_negative_ratio = hard_negative_ratio
         self.batch_cache: dict[str, torch.Tensor] = {}
@@ -205,7 +207,8 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
         """
         # Gets the mask and the supervision
         mask = batch["needs_correction"]
-        sv = unnormalize_franka_joints(batch["supervision"][mask].squeeze(1))
+        # sv = unnormalize_franka_joints(batch["supervision"][mask].squeeze(1))
+        sv = self.robot.unnormalize_joints(batch["supervision"][mask].squeeze(1))
         cuboids = TorchCuboids(
             batch["cuboid_centers"][mask],
             batch["cuboid_dims"][mask],
@@ -247,7 +250,8 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
                 break
             sv = q_optim.detach()
             if loss.item() <= 0.0:
-                batch["supervision"][mask] = normalize_franka_joints(sv).unsqueeze(1)
+                # batch["supervision"][mask] = normalize_franka_joints(sv).unsqueeze(1)
+                batch["supervision"][mask] = self.robot.normalize_joints(sv).unsqueeze(1)
                 return batch
             optimizer.zero_grad()
             loss.backward()
@@ -325,7 +329,8 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
 
         B = q.size(0)
         needs_correction = torch.zeros((B,), dtype=bool, device=q.device)
-        sv_unnorm = unnormalize_franka_joints(batch["supervision"].squeeze(1))
+        # sv_unnorm = unnormalize_franka_joints(batch["supervision"].squeeze(1))
+        sv_unnorm = self.robot.unnormalize_joints(batch["supervision"].squeeze(1))
         # First check if any of the batch elements are already one step
         # away from the goal
         reached_target = self.check_reaching_success(
@@ -353,7 +358,8 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
             # Add to current config to get next config
 
             supervision[mask] = torch.clamp(q[mask] + qdelta, min=-1, max=1)
-            sv_unnorm = unnormalize_franka_joints(supervision[mask])
+            # sv_unnorm = unnormalize_franka_joints(supervision[mask])
+            sv_unnorm = self.robot.unnormalize_joints(supervision[mask])
             # Calculate which supervision has reached the target
             reached_target[mask] = self.check_reaching_success(
                 sv_unnorm, target_position[mask], target_orientation[mask]
@@ -374,7 +380,8 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
             if torch.all(~mask):
                 break
             q[mask] = supervision[mask]
-            q_unnorm = unnormalize_franka_joints(q[mask])
+            # q_unnorm = unnormalize_franka_joints(q[mask])
+            q_unnorm = self.robot.unnormalize_joints(q[mask])
             samples = sampler(q_unnorm)[..., :3]
             xyz[mask, : samples.size(1)] = samples
 
@@ -405,7 +412,7 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
         Checks if a batch of trajectories has reached the target position and orientation within a tolerance.
         """
         assert self.fk_sampler is not None
-        eff_poses = self.fk_sampler.end_effector_pose(q_unnorm, self.prismatic_joint)
+        eff_poses = self.fk_sampler.end_effector_pose(q_unnorm)
         pos_errors = torch.linalg.vector_norm(
             eff_poses[:, :3, -1] - target_position, dim=-1
         )

@@ -5,12 +5,13 @@ from torch.optim.lr_scheduler import LambdaLR
 import torchmetrics
 # from old.robot_constants import RealFrankaConstants
 # from robofin.samplers import TorchFrankaCollisionSampler, TorchFrankaSampler
+from robofin.robots import Robot
 from robofin.samplers import TorchRobotSampler
 
 from avoid_everything.geometry import TorchCuboids, TorchCylinders
 from avoid_everything.loss import CollisionAndBCLossFn
 from avoid_everything.mpiformer import MotionPolicyTransformer
-from avoid_everything.normalization import unnormalize_franka_joints
+# from avoid_everything.normalization import unnormalize_franka_joints
 from avoid_everything.type_defs import DatasetType
 
 
@@ -25,10 +26,10 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
 
     def __init__(
         self,
+        robot: Robot,
         num_robot_points: int,
         point_match_loss_weight: float,
         collision_loss_weight: float,
-        prismatic_joint: float,
         train_batch_size: int,
         disable_viz: bool,
         collision_loss_margin: float,
@@ -53,13 +54,12 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         super().__init__(num_robot_points=num_robot_points)
         # self.mpiformer = MotionPolicyTransformer(num_robot_points=num_robot_points)
 
+        self.robot = robot
         self.num_robot_points = num_robot_points
         self.point_match_loss_weight = point_match_loss_weight
         self.collision_loss_weight = collision_loss_weight
         self.fk_sampler = None
-        self.collision_sampler = None
-        self.prismatic_joint = prismatic_joint
-        self.loss_fun = CollisionAndBCLossFn(collision_loss_margin)
+        self.loss_fun = CollisionAndBCLossFn(self.robot, collision_loss_margin)
         self.val_position_error = torchmetrics.MeanMetric()
         self.val_orientation_error = torchmetrics.MeanMetric()
         self.val_collision_rate = torchmetrics.MeanMetric()
@@ -118,10 +118,10 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         Sets up the model by getting the device and initializing the collision and FK samplers.
         """
         device = self.get_device()
-        self.collision_sampler = TorchFrankaCollisionSampler(
-            device, with_base_link=False
-        )
-        self.fk_sampler = TorchFrankaSampler(
+        # TODO: This assert will fail, this needs thinking about...
+        assert self.robot.device == str(device), "PretrainingMotionPolicyTransformer.robot device mismatch with get_device()"
+        self.fk_sampler = TorchRobotSampler(
+            self.robot,
             num_robot_points=self.num_robot_points,
             num_eef_points=128,
             use_cache=True,
@@ -129,9 +129,6 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
             device=device,
         )
         self.pc_bounds = self.pc_bounds.to(device)
-        self.franka_limits = torch.as_tensor(
-            RealFrankaConstants.JOINT_LIMITS, device=device
-        ).float()
 
     def rollout(
         self,
@@ -147,7 +144,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
                                               on the correct device
         :param rollout_length int: The number of steps to roll out (not including the start)
         :param sampler Callable[[torch.Tensor], torch.Tensor]: A function that takes a batch of robot
-                                                               configurations [B x 7] and returns a batch of
+                                                               configurations [B x self.robot.MAIN_DOF] and returns a batch of
                                                                point clouds samples on the surface of that robot
         :param unnormalize bool: Whether to return the whole trajectory unnormalized
                                  (i.e. converted back into joint space)
@@ -167,8 +164,8 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         B = q.size(0)
         n_chunks = rollout_length // self.action_chunk_length + 1
         actual_rollout_length = n_chunks * self.action_chunk_length + 1
-        trajectory = torch.zeros((B, actual_rollout_length, 7), device=self.device)
-        q_unnorm = unnormalize_franka_joints(q)
+        trajectory = torch.zeros((B, actual_rollout_length, self.robot.MAIN_DOF), device=self.device)
+        q_unnorm = self.robot.unnormalize_joints(q)
         assert isinstance(q_unnorm, torch.Tensor)
         trajectory[:, 0, :] = q_unnorm
 
@@ -179,7 +176,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
             y_hats = torch.clamp(
                 q.unsqueeze(1) + torch.cumsum(qdeltas, dim=1), min=-1, max=1
             )
-            q_unnorm = unnormalize_franka_joints(y_hats)
+            q_unnorm = self.robot.unnormalize_joints(y_hats)
             trajectory[:, i : i + self.action_chunk_length, :] = q_unnorm
             samples = sampler(q_unnorm[:, -1, :])[..., :3]
             point_cloud[:, : samples.size(1)] = samples
@@ -219,7 +216,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
             batch["supervision"],
         )
         collision_loss, point_match_loss = self.loss_fun(
-            y_hats.reshape(-1, 7),
+            y_hats.reshape(-1, self.robot.MAIN_DOF),
             cuboid_centers.repeat_interleave(self.action_chunk_length, dim=0),
             cuboid_dims.repeat_interleave(self.action_chunk_length, dim=0),
             cuboid_quats.repeat_interleave(self.action_chunk_length, dim=0),
@@ -227,8 +224,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
             cylinder_radii.repeat_interleave(self.action_chunk_length, dim=0),
             cylinder_heights.repeat_interleave(self.action_chunk_length, dim=0),
             cylinder_quats.repeat_interleave(self.action_chunk_length, dim=0),
-            supervision.reshape(-1, 7),
-            self.prismatic_joint,
+            supervision.reshape(-1, self.robot.MAIN_DOF),
         )
         return collision_loss, point_match_loss
 
@@ -268,7 +264,8 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         :rtype torch.Tensor: Batched point cloud of size [B, self.num_robot_points, 3]
         """
         assert self.fk_sampler is not None
-        points = self.fk_sampler.sample(q, self.prismatic_joint)
+        points = self.fk_sampler.sample(q)
+        assert isinstance(points, torch.Tensor)
         return points
 
     def target_error(
@@ -282,7 +279,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         :return: A tuple containing the position error and the orientation error.
         """
         assert self.fk_sampler is not None
-        eff = self.fk_sampler.end_effector_pose(rollouts[:, -1], self.prismatic_joint)
+        eff = self.fk_sampler.end_effector_pose(rollouts[:, -1])
         position_error = torch.linalg.vector_norm(
             eff[:, :3, -1] - batch["target_position"], dim=1
         )
@@ -311,9 +308,9 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         # Here is some Pytorch broadcasting voodoo to calculate whether each
         # rollout has a collision or not (looking to calculate the collision rate)
         assert rollouts.size(0) == B
-        assert rollouts.size(2) == 7
+        assert rollouts.size(2) == self.robot.MAIN_DOF
 
-        rollout_steps = rollouts.reshape(-1, 7)
+        rollout_steps = rollouts.reshape(-1, self.robot.MAIN_DOF)
         has_collision = torch.zeros(B, dtype=torch.bool, device=self.device)
         assert self.collision_sampler is not None
         collision_spheres = self.collision_sampler.compute_spheres(
@@ -360,7 +357,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         B = rollouts.size(0)
         assert self.fk_sampler is not None
         eff_poses = self.fk_sampler.end_effector_pose(
-            rollouts.reshape(-1, 7), self.prismatic_joint
+            rollouts.reshape(-1, self.robot.MAIN_DOF)
         ).reshape(B, -1, 4, 4)
         pos_errors = torch.linalg.vector_norm(
             eff_poses[:, :, :3, -1] - batch["target_position"][:, None, :], dim=2
@@ -409,7 +406,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
 
     def trajectory_validation_step(
         self, batch: dict[str, torch.Tensor], dataloader_idx: int
-    ) -> torch.Tensor:
+    ) -> None:
         """
         Performs a validation step by calculating metrics on rollouts.
         """
@@ -431,7 +428,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
 
     def validation_step(  # type: ignore[override]
         self, batch: dict[str, torch.Tensor], _batch_idx: int, dataloader_idx: int
-    ) -> torch.Tensor:
+    ) -> None:
         """
         Performs all validation steps based on dataset type.
         """

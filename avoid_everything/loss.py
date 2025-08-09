@@ -24,7 +24,7 @@ from typing import Tuple
 
 import torch
 import torch.nn.functional as F
-# from robofin.samplers import TorchFrankaSampler
+from robofin.robots import Robot
 from robofin.samplers import TorchRobotSampler
 
 from avoid_everything.geometry import TorchCuboids, TorchCylinders
@@ -110,17 +110,19 @@ class CollisionAndBCLossFn:
 
     def __init__(
         self,
+        robot: Robot,
         collision_margin,
     ):
+        self.robot = robot
         self.fk_sampler = None
         self.num_points = 1024
         self.collision_margin = collision_margin
 
-    def sample(self, q, prismatic_joint):
+    def sample(self, q):
         assert self.fk_sampler is not None
         if q.ndim == 4:
             return self.fk_sampler.sample_from_poses(q)
-        return self.fk_sampler.sample(q, prismatic_joint)
+        return self.fk_sampler.sample(q)
 
     def __call__(
         self,
@@ -133,7 +135,6 @@ class CollisionAndBCLossFn:
         cylinder_heights: torch.Tensor,
         cylinder_quaternions: torch.Tensor,
         target: torch.Tensor,
-        prismatic_joint: float,
         reduction="mean",
     ) -> Tuple[torch.Tensor, torch.Tensor]:  # , torch.Tensor]:
         """
@@ -155,21 +156,16 @@ class CollisionAndBCLossFn:
         :rtype Tuple[torch.Tensor, torch.Tensor]: The two losses aggregated over the batch
         """
         if self.fk_sampler is None:
-            self.fk_sampler = TorchFrankaSampler(
+            self.fk_sampler = TorchRobotSampler(
+                self.robot,
                 num_robot_points=self.num_points,
                 num_eef_points=128,
-                device=input.device,
                 with_base_link=False,  # Remove base link because this isn't controllable anyway
                 use_cache=True,
+                device=input.device,
             )
-        input_pc = self.sample(
-            input,
-            prismatic_joint,
-        )[..., :3]
-        target_pc = self.sample(
-            target,
-            prismatic_joint,
-        )[..., :3]
+        input_pc = self.sample(input)[..., :3]
+        target_pc = self.sample(target)[..., :3]
         return (
             collision_loss(
                 input_pc,

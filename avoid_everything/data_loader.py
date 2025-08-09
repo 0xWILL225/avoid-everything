@@ -28,16 +28,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-# from robofin.collision import FrankaCollisionSpheres
-# from robofin.old.kinematics.numba import franka_arm_link_fk
-# from old.robot_constants import RealFrankaConstants
-# from old.samplers import NumpyFrankaSampler
 from robofin.robots import Robot
 from robofin.samplers import NumpyRobotSampler
 
 from avoid_everything.dataset import Dataset as MPNDataset
 from avoid_everything.geometry import construct_mixed_point_cloud
-# from avoid_everything.normalization import normalize_franka_joints
 from avoid_everything.type_defs import DatasetType
 
 # Import for mpinets data format compatibility
@@ -99,7 +94,7 @@ class Base(Dataset):
         else:
             # Try new format first, fall back to old mpinets format
             try:
-                with MPNDataset(self._database) as f:
+                with MPNDataset(self.robot, self._database) as f:
                     self.state_count = len(f[self.trajectory_key])
                     self.problem_count = len(f)
                 self._use_mpinets_format = False
@@ -136,7 +131,7 @@ class Base(Dataset):
 
     @property
     def md5_checksum(self):
-        with MPNDataset(self._database) as f:
+        with MPNDataset(self.robot, self._database) as f:
             return f.md5_checksum
 
     @classmethod
@@ -429,7 +424,7 @@ class TrajectoryDataset(Base):
         return self.problem_count
 
     def unpadded_expert(self, pidx: int):
-        with MPNDataset(self._database, "r") as f:
+        with MPNDataset(self.robot, self._database, "r") as f:
             return torch.as_tensor(f[self.trajectory_key].expert(pidx))
 
     def __getitem__(self, pidx: int) -> Dict[str, torch.Tensor]:
@@ -481,7 +476,7 @@ class TrajectoryDataset(Base):
             return item
         else:
             # Handle new format
-            with MPNDataset(self._database, "r") as f:
+            with MPNDataset(self.robot, self._database, "r") as f:
                 problem = f[self.trajectory_key].problem(pidx)
                 flobs = f[self.trajectory_key].flattened_obstacles(pidx)
                 item = self.get_inputs(problem, flobs)
@@ -652,7 +647,7 @@ class StateDataset(Base):
             return item
         else:
             # Handle new format
-            with MPNDataset(self._database, "r") as f:
+            with MPNDataset(self.robot, self._database, "r") as f:
                 pidx = f[self.trajectory_key].lookup_pidx(idx)
                 problem = f[self.trajectory_key].problem(pidx)
                 flobs = f[self.trajectory_key].flattened_obstacles(pidx)
@@ -906,6 +901,6 @@ class DataModule(pl.LightningDataModule):
         checksums = {}
         for key, path in paths:
             if path.exists():
-                with MPNDataset(path) as f:
+                with MPNDataset(self.robot, path) as f:
                     checksums[key] = f.md5_checksum
         return checksums
