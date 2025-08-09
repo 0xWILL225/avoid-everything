@@ -3,15 +3,12 @@ from typing import Callable, Tuple
 import torch
 from torch.optim.lr_scheduler import LambdaLR
 import torchmetrics
-# from old.robot_constants import RealFrankaConstants
-# from robofin.samplers import TorchFrankaCollisionSampler, TorchFrankaSampler
 from robofin.robots import Robot
 from robofin.samplers import TorchRobotSampler
 
 from avoid_everything.geometry import TorchCuboids, TorchCylinders
 from avoid_everything.loss import CollisionAndBCLossFn
 from avoid_everything.mpiformer import MotionPolicyTransformer
-# from avoid_everything.normalization import unnormalize_franka_joints
 from avoid_everything.type_defs import DatasetType
 
 
@@ -26,7 +23,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
 
     def __init__(
         self,
-        robot: Robot,
+        urdf_path: str,
         num_robot_points: int,
         point_match_loss_weight: float,
         collision_loss_weight: float,
@@ -54,7 +51,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         super().__init__(num_robot_points=num_robot_points)
         # self.mpiformer = MotionPolicyTransformer(num_robot_points=num_robot_points)
 
-        self.robot = robot
+        self.robot = Robot(urdf_path, device=self.get_device())
         self.num_robot_points = num_robot_points
         self.point_match_loss_weight = point_match_loss_weight
         self.collision_loss_weight = collision_loss_weight
@@ -118,7 +115,6 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         Sets up the model by getting the device and initializing the collision and FK samplers.
         """
         device = self.get_device()
-        # TODO: This assert will fail, this needs thinking about...
         assert self.robot.device == str(device), "PretrainingMotionPolicyTransformer.robot device mismatch with get_device()"
         self.fk_sampler = TorchRobotSampler(
             self.robot,
@@ -312,10 +308,8 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
 
         rollout_steps = rollouts.reshape(-1, self.robot.MAIN_DOF)
         has_collision = torch.zeros(B, dtype=torch.bool, device=self.device)
-        assert self.collision_sampler is not None
-        collision_spheres = self.collision_sampler.compute_spheres(
-            rollout_steps, prismatic_joint=self.prismatic_joint
-        )
+        
+        collision_spheres = self.robot.compute_spheres(rollout_steps)
         for radii, spheres in collision_spheres: # spheres: torch.Tensor [B, num_spheres, 3], 3-dim is x,y,z
             num_spheres = spheres.shape[-2]
             sphere_sequence = spheres.reshape((B, -1, num_spheres, 3))

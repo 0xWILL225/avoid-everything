@@ -7,13 +7,7 @@ from torch import optim
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import LambdaLR
 
-from robofin.robots import Robot
-
 from avoid_everything.geometry import TorchCuboids, TorchCylinders
-# from avoid_everything.normalization import (
-#     normalize_franka_joints,
-#     unnormalize_franka_joints,
-# )
 from avoid_everything.pretraining import PretrainingMotionPolicyTransformer
 from avoid_everything.type_defs import DatasetType
 
@@ -21,7 +15,7 @@ from avoid_everything.type_defs import DatasetType
 class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
     def __init__(
         self,
-        robot: Robot,
+        urdf_path: str,
         num_robot_points: int,
         point_match_loss_weight: float,
         collision_loss_weight: float,
@@ -37,7 +31,7 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
         hard_negative_ratio: float = 0.2,
     ):
         super().__init__(
-            robot,
+            urdf_path,
             num_robot_points,
             point_match_loss_weight,
             collision_loss_weight,
