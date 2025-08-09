@@ -7,11 +7,13 @@ from torch import optim
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import LambdaLR
 
+from robofin.robots import Robot
+
 from avoid_everything.geometry import TorchCuboids, TorchCylinders
-from avoid_everything.normalization import (
-    normalize_franka_joints,
-    unnormalize_franka_joints,
-)
+# from avoid_everything.normalization import (
+#     normalize_franka_joints,
+#     unnormalize_franka_joints,
+# )
 from avoid_everything.pretraining import PretrainingMotionPolicyTransformer
 from avoid_everything.type_defs import DatasetType
 

@@ -1,3 +1,4 @@
+from pathlib import Path
 import hashlib
 import logging
 from dataclasses import dataclass
@@ -7,9 +8,9 @@ from typing import Callable
 import h5py
 import numpy as np
 from geometrout.primitive import Cuboid, CuboidArray, Cylinder, CylinderArray
-from robofin.robots_original import FrankaRobot
+# from old.robots import FrankaRobot
 from tqdm.auto import tqdm, trange
-from pathlib import Path
+
 
 from avoid_everything.type_defs import PlanningProblem
 

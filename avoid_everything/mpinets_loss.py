@@ -24,7 +24,7 @@ from typing import Tuple
 from geometry import TorchCuboids, TorchCylinders
 import torch.nn.functional as F
 import torch
-from robofin.pointcloud.torch import RobotSampler
+from robofin.samplers import TorchRobotSampler
 from robofin.robots import Robot
 
 

@@ -29,13 +29,15 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 # from robofin.collision import FrankaCollisionSpheres
-from robofin.kinematics.numba import franka_arm_link_fk
-from robofin.robot_constants import RealFrankaConstants
-from robofin.samplers_original import NumpyFrankaSampler
+# from robofin.old.kinematics.numba import franka_arm_link_fk
+# from old.robot_constants import RealFrankaConstants
+# from old.samplers import NumpyFrankaSampler
+from robofin.robots import Robot
+from robofin.samplers import NumpyRobotSampler
 
 from avoid_everything.dataset import Dataset as MPNDataset
 from avoid_everything.geometry import construct_mixed_point_cloud
-from avoid_everything.normalization import normalize_franka_joints
+# from avoid_everything.normalization import normalize_franka_joints
 from avoid_everything.type_defs import DatasetType
 
 # Import for mpinets data format compatibility
@@ -65,16 +67,17 @@ class Base(Dataset):
 
     def __init__(
         self,
+        robot: Robot,
         data_path: Union[Path, str],
         dataset_type: DatasetType,
         trajectory_key: str,
         num_robot_points: int,
         num_obstacle_points: int,
         num_target_points: int,
-        prismatic_joint: float,
         random_scale: float,
     ):
         """
+        :param robot (Robot): Robot object
         :param directory Path: The path to the root of the data directory
         :param num_robot_points int: The number of points to sample from the robot
         :param num_obstacle_points int: The number of points to sample from the obstacles
@@ -85,6 +88,7 @@ class Base(Dataset):
                                    noise to apply to the joints during training.
                                    This is only used for train datasets.
         """
+        self.robot = robot
         self._database = Path(data_path)
         self.trajectory_key = trajectory_key
         self.train = dataset_type == DatasetType.TRAIN
@@ -117,16 +121,14 @@ class Base(Dataset):
         self.num_obstacle_points = num_obstacle_points
         self.num_robot_points = num_robot_points
         self.num_target_points = num_target_points
-        self.prismatic_joint = prismatic_joint
         self.random_scale = random_scale
-        self.franka_sampler = NumpyFrankaSampler(
+        self.robot_sampler = NumpyRobotSampler(
+            self.robot,
             num_robot_points=self.num_robot_points,
             num_eef_points=self.num_target_points,
             use_cache=True,
             with_base_link=True,
         )
-
-        # self.cooo = FrankaCollisionSpheres()
 
     @property
     def file_exists(self) -> bool:
@@ -140,6 +142,7 @@ class Base(Dataset):
     @classmethod
     def load_from_directory(
         cls,
+        robot: Robot,
         directory: Union[Path, str],
         dataset_type: DatasetType,
         *args,
@@ -167,24 +170,27 @@ class Base(Dataset):
         else:
             raise Exception(f"Invalid dataset type: {dataset_type}")
         return cls(
+            robot,
             data_path,
             dataset_type,
             *args,
             **kwargs,
         )
 
-    @classmethod
-    def clamp_and_normalize(cls, configuration_tensor: torch.Tensor):
+    def clamp_and_normalize(self, configuration_tensor: torch.Tensor):
         """
         Normalizes the joints between -1 and 1 according the the joint limits
 
-        :param configuration_tensor torch.Tensor: The input tensor. Has dim [7]
+        :param configuration_tensor (torch.Tensor): The input tensor. 
+            Has dim [self.robot.MAIN_DOF]
         """
-        limits = torch.as_tensor(RealFrankaConstants.JOINT_LIMITS).float()
+        # NOTE: self.robot.main_joint_limits based on URDF is different from the
+        # original implementation's RealFrankaConstanst.JOINT_LIMITS for joint 6
+        limits = torch.as_tensor(self.robot.main_joint_limits).float() 
         configuration_tensor = torch.minimum(
             torch.maximum(configuration_tensor, limits[:, 0]), limits[:, 1]
         )
-        return normalize_franka_joints(configuration_tensor)
+        return self.robot.normalize_joints(configuration_tensor)
 
     def get_inputs_mpinets(self, trajectory_idx: int) -> Dict[str, torch.Tensor]:
         """
@@ -195,13 +201,11 @@ class Base(Dataset):
         with h5py.File(str(self._database), "r") as f:
             # Get target from last configuration in trajectory 
             target_config = f[self.trajectory_key][trajectory_idx, -1, :]
-            target_pose = franka_arm_link_fk(
-                target_config, self.prismatic_joint, np.eye(4)
-            )[RealFrankaConstants.ARM_LINKS.right_gripper]
+            assert isinstance(target_config, np.ndarray)
+            target_pose = self.robot.fk(target_config)[self.robot.tcp_link_name]
             target_points = torch.as_tensor(
-                self.franka_sampler.sample_end_effector(
+                self.robot_sampler.sample_end_effector(
                     target_pose,
-                    self.prismatic_joint,
                 )[..., :3]
             ).float()
             item["target_position"] = torch.as_tensor(target_pose[:3, 3]).float()
@@ -321,13 +325,10 @@ class Base(Dataset):
                                         and used for training
         """
         item = {}
-        target_pose = franka_arm_link_fk(
-            problem.target, self.prismatic_joint, np.eye(4)
-        )[RealFrankaConstants.ARM_LINKS.right_gripper]
+        target_pose = self.robot.fk(problem.target)[self.robot.tcp_link_name]
         target_points = torch.as_tensor(
-            self.franka_sampler.sample_end_effector(
+            self.robot_sampler.sample_end_effector(
                 target_pose,
-                self.prismatic_joint,
             )[..., :3]
         ).float()
         item["target_position"] = torch.as_tensor(target_pose[:3, 3]).float()
@@ -369,13 +370,13 @@ class TrajectoryDataset(Base):
 
     def __init__(
         self,
+        robot: Robot,
         data_path: Union[Path, str],
         dataset_type: DatasetType,
         trajectory_key: str,
         num_robot_points: int,
         num_obstacle_points: int,
         num_target_points: int,
-        prismatic_joint: float,
         random_scale: float = 0.0,
     ):
         """
@@ -387,36 +388,36 @@ class TrajectoryDataset(Base):
         :param dataset_type DatasetType: What type of dataset this is
         """
         super().__init__(
+            robot,
             data_path,
             dataset_type,
             trajectory_key,
             num_robot_points,
             num_obstacle_points,
             num_target_points,
-            prismatic_joint,
             random_scale,
         )
 
     @classmethod
     def load_from_directory(
         cls,
+        robot: Robot,
         directory: Path,
         trajectory_key: str,
         num_robot_points: int,
         num_obstacle_points: int,
         num_target_points: int,
         dataset_type: DatasetType,
-        prismatic_joint: float,
         random_scale: float,
     ):
         return super().load_from_directory(
+            robot,
             directory,
             dataset_type,
             trajectory_key,
             num_robot_points,
             num_obstacle_points,
             num_target_points,
-            prismatic_joint,
             random_scale,
         )
 
@@ -457,14 +458,13 @@ class TrajectoryDataset(Base):
                     )
 
                     item["configuration"] = self.clamp_and_normalize(randomized)
-                    robot_points = self.franka_sampler.sample(
-                        randomized.numpy(), self.prismatic_joint
+                    robot_points = self.robot_sampler.sample(
+                        randomized.numpy()
                     )[:, :3]
                 else:
                     item["configuration"] = self.clamp_and_normalize(config_tensor)
-                    robot_points = self.franka_sampler.sample(
+                    robot_points = self.robot_sampler.sample(
                         config_tensor.numpy(),
-                        self.prismatic_joint,
                     )[:, :3]
                 robot_points = torch.as_tensor(robot_points).float()
 
@@ -495,14 +495,13 @@ class TrajectoryDataset(Base):
                     )
 
                     item["configuration"] = self.clamp_and_normalize(randomized)
-                    robot_points = self.franka_sampler.sample(
-                        randomized.numpy(), self.prismatic_joint
+                    robot_points = self.robot_sampler.sample(
+                        randomized.numpy()
                     )[:, :3]
                 else:
                     item["configuration"] = self.clamp_and_normalize(config_tensor)
-                    robot_points = self.franka_sampler.sample(
+                    robot_points = self.robot_sampler.sample(
                         config_tensor.numpy(),
-                        self.prismatic_joint,
                     )[:, :3]
                 robot_points = torch.as_tensor(robot_points).float()
 
@@ -528,13 +527,13 @@ class StateDataset(Base):
 
     def __init__(
         self,
+        robot: Robot,
         data_path: Union[Path, str],
         dataset_type: DatasetType,
         trajectory_key: str,
         num_robot_points: int,
         num_obstacle_points: int,
         num_target_points: int,
-        prismatic_joint: float,
         random_scale: float,
         action_chunk_length: int,
     ):
@@ -550,13 +549,13 @@ class StateDataset(Base):
                                    This is only used for train datasets.
         """
         super().__init__(
+            robot,
             data_path,
             dataset_type,
             trajectory_key,
             num_robot_points,
             num_obstacle_points,
             num_target_points,
-            prismatic_joint,
             random_scale,
         )
         self.action_chunk_length = action_chunk_length
@@ -564,24 +563,24 @@ class StateDataset(Base):
     @classmethod
     def load_from_directory(
         cls,
+        robot: Robot,
         directory: Path,
         trajectory_key: str,
         num_robot_points: int,
         num_obstacle_points: int,
         num_target_points: int,
         dataset_type: DatasetType,
-        prismatic_joint: float,
         random_scale: float,
         action_chunk_length: int,
     ):
         return super().load_from_directory(
+            robot,
             directory,
             dataset_type,
             trajectory_key,
             num_robot_points,
             num_obstacle_points,
             num_target_points,
-            prismatic_joint,
             random_scale,
             action_chunk_length=action_chunk_length,
         )
@@ -629,13 +628,13 @@ class StateDataset(Base):
                     )
 
                     item["configuration"] = self.clamp_and_normalize(randomized)
-                    robot_points = self.franka_sampler.sample(
-                        randomized.numpy(), self.prismatic_joint
+                    robot_points = self.robot_sampler.sample(
+                        randomized.numpy()
                     )[:, :3]
                 else:
                     item["configuration"] = self.clamp_and_normalize(config_tensor)
-                    robot_points = self.franka_sampler.sample(
-                        config_tensor.numpy(), self.prismatic_joint
+                    robot_points = self.robot_sampler.sample(
+                        config_tensor.numpy()
                     )[:, :3]
                 robot_points = torch.as_tensor(robot_points).float()
                 item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
@@ -672,13 +671,13 @@ class StateDataset(Base):
                     )
 
                     item["configuration"] = self.clamp_and_normalize(randomized)
-                    robot_points = self.franka_sampler.sample(
-                        randomized.numpy(), self.prismatic_joint
+                    robot_points = self.robot_sampler.sample(
+                        randomized.numpy()
                     )[:, :3]
                 else:
                     item["configuration"] = self.clamp_and_normalize(config_tensor)
-                    robot_points = self.franka_sampler.sample(
-                        config_tensor.numpy(), self.prismatic_joint
+                    robot_points = self.robot_sampler.sample(
+                        config_tensor.numpy()
                     )[:, :3]
                 robot_points = torch.as_tensor(robot_points).float()
                 item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
@@ -699,13 +698,13 @@ class StateDataset(Base):
 class DataModule(pl.LightningDataModule):
     def __init__(
         self,
+        robot: Robot,
         data_dir: str,
         train_trajectory_key: str,
         val_trajectory_key: str,
         num_robot_points: int,
         num_obstacle_points: int,
         num_target_points: int,
-        prismatic_joint: float,
         action_chunk_length: int,
         random_scale: float,
         train_batch_size: int,
@@ -713,6 +712,7 @@ class DataModule(pl.LightningDataModule):
         num_workers: int,
     ):
         super().__init__()
+        self.robot = robot
         self.data_dir = Path(data_dir)
         self.train_trajectory_key = train_trajectory_key
         self.val_trajectory_key = val_trajectory_key
@@ -722,7 +722,6 @@ class DataModule(pl.LightningDataModule):
         self.num_obstacle_points = num_obstacle_points
         self.num_target_points = num_target_points
         self.num_workers = num_workers
-        self.prismatic_joint = prismatic_joint
         self.random_scale = random_scale
         self.action_chunk_length = action_chunk_length
 
@@ -736,35 +735,35 @@ class DataModule(pl.LightningDataModule):
         """
         if stage == "fit" or stage is None:
             self.data_train = StateDataset.load_from_directory(
+                self.robot,
                 self.data_dir,
                 dataset_type=DatasetType.TRAIN,
                 trajectory_key=self.train_trajectory_key,
                 num_robot_points=self.num_robot_points,
                 num_obstacle_points=self.num_obstacle_points,
                 num_target_points=self.num_target_points,
-                prismatic_joint=self.prismatic_joint,
                 random_scale=self.random_scale,
                 action_chunk_length=self.action_chunk_length,
             )
             self.data_val_state = StateDataset.load_from_directory(
+                self.robot,
                 self.data_dir,
                 dataset_type=DatasetType.VAL_STATE,
                 trajectory_key=self.val_trajectory_key,
                 num_robot_points=self.num_robot_points,
                 num_obstacle_points=self.num_obstacle_points,
                 num_target_points=self.num_target_points,
-                prismatic_joint=self.prismatic_joint,
                 random_scale=0.0,
                 action_chunk_length=self.action_chunk_length,
             )
             self.data_val = TrajectoryDataset.load_from_directory(
+                self.robot,
                 self.data_dir,
                 dataset_type=DatasetType.VAL,
                 trajectory_key=self.val_trajectory_key,
                 num_robot_points=self.num_robot_points,
                 num_obstacle_points=self.num_obstacle_points,
                 num_target_points=self.num_target_points,
-                prismatic_joint=self.prismatic_joint,
                 random_scale=0.0,
             )
             # Handle missing optional validation files gracefully
@@ -772,13 +771,13 @@ class DataModule(pl.LightningDataModule):
             if mini_train_path.exists():
                 try:
                     self.data_mini_train = TrajectoryDataset.load_from_directory(
+                        self.robot,
                         self.data_dir,
                         dataset_type=DatasetType.MINI_TRAIN,
                         trajectory_key=self.val_trajectory_key,
                         num_robot_points=self.num_robot_points,
                         num_obstacle_points=self.num_obstacle_points,
                         num_target_points=self.num_target_points,
-                        prismatic_joint=self.prismatic_joint,
                         random_scale=0.0,
                     )
                 except:
@@ -791,13 +790,13 @@ class DataModule(pl.LightningDataModule):
             if val_pretrain_path.exists():
                 try:
                     self.data_val_pretrain = TrajectoryDataset.load_from_directory(
+                        self.robot,
                         self.data_dir,
                         dataset_type=DatasetType.VAL_PRETRAIN,
                         trajectory_key=self.val_trajectory_key,
                         num_robot_points=self.num_robot_points,
                         num_obstacle_points=self.num_obstacle_points,
                         num_target_points=self.num_target_points,
-                        prismatic_joint=self.prismatic_joint,
                         random_scale=0.0,
                     )
                 except:
@@ -807,25 +806,25 @@ class DataModule(pl.LightningDataModule):
                 self.data_val_pretrain = self.data_val
         if stage == "test" or stage is None:
             self.data_test = StateDataset.load_from_directory(
+                self.robot,
                 self.data_dir,
                 self.train_trajectory_key,  # TODO change this
                 self.num_robot_points,
                 self.num_obstacle_points,
                 self.num_target_points,
                 dataset_type=DatasetType.TEST,
-                prismatic_joint=self.prismatic_joint,
                 random_scale=self.random_scale,
                 action_chunk_length=self.action_chunk_length,
             )
         if stage == "dagger":
             self.data_dagger = TrajectoryDataset.load_from_directory(
+                self.robot,
                 self.data_dir,
                 dataset_type=DatasetType.TRAIN,
                 trajectory_key=self.val_trajectory_key,
                 num_robot_points=self.num_robot_points,
                 num_obstacle_points=self.num_obstacle_points,
                 num_target_points=self.num_target_points,
-                prismatic_joint=self.prismatic_joint,
                 random_scale=0.0,
             )
 
@@ -861,28 +860,27 @@ class DataModule(pl.LightningDataModule):
         loaders = [None, None, None, None]
         loaders[DatasetType.VAL_STATE] = DataLoader(
             self.data_val_state,
-            self.train_batch_size,  # Set this way because this dataset matches the structure of the training
+            self.train_batch_size,
             num_workers=self.num_workers,
-            pin_memory=True,  # Restored
+            pin_memory=True, 
         )
         loaders[DatasetType.VAL] = DataLoader(
             self.data_val,
             self.val_batch_size,
             num_workers=self.num_workers,
-            pin_memory=True,  # Restored
+            pin_memory=True,
         )
         loaders[DatasetType.MINI_TRAIN] = DataLoader(
             self.data_mini_train,
             self.val_batch_size,
             num_workers=self.num_workers,
-            pin_memory=True,  # Restored
+            pin_memory=True,
         )
-        # Done this way to keep indexing safety logic
         loaders[DatasetType.VAL_PRETRAIN] = DataLoader(
             self.data_val_pretrain,
             self.val_batch_size,
             num_workers=self.num_workers,
-            pin_memory=True,  # Restored
+            pin_memory=True,
         )
         return loaders
 

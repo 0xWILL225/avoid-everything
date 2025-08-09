@@ -8,7 +8,7 @@ from tqdm.auto import tqdm
 
 from avoid_everything.data_loader import DataModule
 from avoid_everything.pretraining import PretrainingMotionPolicyTransformer
-from avoid_everything.rope import ROPEMotionPolicyTransformer
+# from avoid_everything.rope import ROPEMotionPolicyTransformer
 from avoid_everything.type_defs import DatasetType
 
 

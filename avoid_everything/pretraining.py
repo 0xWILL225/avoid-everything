@@ -1,12 +1,11 @@
 from typing import Callable, Tuple
 
-import lightning.pytorch as pl
 import torch
-import torch_geometric.transforms as T
-import torchmetrics
-from robofin.robot_constants import RealFrankaConstants
-from robofin.samplers import TorchFrankaCollisionSampler, TorchFrankaSampler
 from torch.optim.lr_scheduler import LambdaLR
+import torchmetrics
+# from old.robot_constants import RealFrankaConstants
+# from robofin.samplers import TorchFrankaCollisionSampler, TorchFrankaSampler
+from robofin.samplers import TorchRobotSampler
 
 from avoid_everything.geometry import TorchCuboids, TorchCylinders
 from avoid_everything.loss import CollisionAndBCLossFn

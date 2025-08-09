@@ -35,14 +35,16 @@ from typing import Any, Dict, List, Literal, Tuple, Union
 
 import h5py
 import numpy as np
+from ompl.util import noOutputHandler
+from tqdm.auto import tqdm
+
 from atob.planners.arm.aitstar import FrankaAITStar
 from atob.planners.arm.rrt_connect import FrankaRRTConnect
 from geometrout.primitive import Cuboid, CuboidArray, Cylinder, CylinderArray
-from ompl.util import noOutputHandler
-from robofin.bullet import Bullet
-from robofin.collision import FrankaCollisionSpheres
-from robofin.robots import FrankaRobot
-from tqdm.auto import tqdm
+
+# from robofin.bullet import Bullet
+# from robofin.collision import FrankaCollisionSpheres
+# from robofin.robots import FrankaRobot
 
 from avoid_everything.data_pipeline.environments.base import Environment
 from avoid_everything.dataset import Dataset
