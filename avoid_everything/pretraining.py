@@ -11,6 +11,8 @@ from avoid_everything.loss import CollisionAndBCLossFn
 from avoid_everything.mpiformer import MotionPolicyTransformer
 from avoid_everything.type_defs import DatasetType
 
+from termcolor import cprint
+
 
 class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
     """
@@ -51,12 +53,13 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         super().__init__(num_robot_points=num_robot_points)
         # self.mpiformer = MotionPolicyTransformer(num_robot_points=num_robot_points)
 
-        self.robot = Robot(urdf_path, device=self.get_device())
+        self.urdf_path = urdf_path
+        self.robot = None
         self.num_robot_points = num_robot_points
         self.point_match_loss_weight = point_match_loss_weight
         self.collision_loss_weight = collision_loss_weight
         self.fk_sampler = None
-        self.loss_fun = CollisionAndBCLossFn(self.robot, collision_loss_margin)
+        self.loss_fun = CollisionAndBCLossFn(self.urdf_path, collision_loss_margin)
         self.val_position_error = torchmetrics.MeanMetric()
         self.val_orientation_error = torchmetrics.MeanMetric()
         self.val_collision_rate = torchmetrics.MeanMetric()
@@ -115,7 +118,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         Sets up the model by getting the device and initializing the collision and FK samplers.
         """
         device = self.get_device()
-        assert self.robot.device == str(device), "PretrainingMotionPolicyTransformer.robot device mismatch with get_device()"
+        self.robot = Robot(self.urdf_path, device=device)
         self.fk_sampler = TorchRobotSampler(
             self.robot,
             num_robot_points=self.num_robot_points,
@@ -160,6 +163,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         B = q.size(0)
         n_chunks = rollout_length // self.action_chunk_length + 1
         actual_rollout_length = n_chunks * self.action_chunk_length + 1
+        assert self.robot is not None
         trajectory = torch.zeros((B, actual_rollout_length, self.robot.MAIN_DOF), device=self.device)
         q_unnorm = self.robot.unnormalize_joints(q)
         assert isinstance(q_unnorm, torch.Tensor)
@@ -211,6 +215,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
             batch["cylinder_quats"],
             batch["supervision"],
         )
+        assert self.robot is not None
         collision_loss, point_match_loss = self.loss_fun(
             y_hats.reshape(-1, self.robot.MAIN_DOF),
             cuboid_centers.repeat_interleave(self.action_chunk_length, dim=0),
@@ -303,6 +308,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
 
         # Here is some Pytorch broadcasting voodoo to calculate whether each
         # rollout has a collision or not (looking to calculate the collision rate)
+        assert self.robot is not None
         assert rollouts.size(0) == B
         assert rollouts.size(2) == self.robot.MAIN_DOF
 
@@ -350,6 +356,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         """
         B = rollouts.size(0)
         assert self.fk_sampler is not None
+        assert self.robot is not None
         eff_poses = self.fk_sampler.end_effector_pose(
             rollouts.reshape(-1, self.robot.MAIN_DOF)
         ).reshape(B, -1, 4, 4)

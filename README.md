@@ -2,6 +2,13 @@
 
 I had some trouble using the original project, so I made this fork to fix the issues with the code and make a more stable development container for the project that anyone can use. I added my own fork of robofin package as a submodule, so that I could edit its contents to make it more general, not specific to the Franka Panda robot, for which the fishbotics project is currently adapted. I might add the atob project as a submodule as well. 
 
+## Quick start
+
+Run pre-training with:
+```
+python3 avoid_everything/run_training.py model_configs/pretraining.yaml
+```
+
 ### Spherification
 
 Check out the `spherification/README.md` if you want to create a collisions sphere representation of your robot, based on its `.urdf`. Collision spheres and self-collision spheres are required if you want to use the Avoid Everything project without modification. My forked version of robofin expects the file structure:

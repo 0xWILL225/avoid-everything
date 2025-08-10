@@ -442,8 +442,8 @@ class UnindexedKeyedData:
 
 
 class KeyedData(UnindexedKeyedData):
-    def __init__(self, key: str, file: h5py.File, mode: str = "r"):
-        super().__init__(key, file, mode)
+    def __init__(self, robot: Robot, key: str, file: h5py.File, mode: str = "r"):
+        super().__init__(robot, key, file, mode)
         self.guard_index()
 
     @check_file
@@ -953,7 +953,7 @@ class Dataset:
             logging.warning(f"Must rebuild index for {key} to maintain trustworthiness")
         if not self.file[key].attrs.get(WELL_INDEXED, False):
             return UnindexedKeyedData(self.robot, key, self.file, self.mode)
-        return KeyedData(key, self.file, self.mode)
+        return KeyedData(self.robot, key, self.file, self.mode)
 
     def close(self):
         if self.file.id:

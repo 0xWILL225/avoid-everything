@@ -110,10 +110,11 @@ class CollisionAndBCLossFn:
 
     def __init__(
         self,
-        robot: Robot,
+        urdf_path: str,
         collision_margin,
     ):
-        self.robot = robot
+        self.urdf_path = urdf_path
+        self.robot = None
         self.fk_sampler = None
         self.num_points = 1024
         self.collision_margin = collision_margin
@@ -156,6 +157,7 @@ class CollisionAndBCLossFn:
         :rtype Tuple[torch.Tensor, torch.Tensor]: The two losses aggregated over the batch
         """
         if self.fk_sampler is None:
+            self.robot = Robot(self.urdf_path, device=input.device)
             self.fk_sampler = TorchRobotSampler(
                 self.robot,
                 num_robot_points=self.num_points,

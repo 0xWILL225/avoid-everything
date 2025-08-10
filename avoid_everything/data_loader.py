@@ -92,26 +92,32 @@ class Base(Dataset):
             self.state_count = 0
             self.problem_count = 0
         else:
+            with MPNDataset(self.robot, self._database) as f:
+                self.state_count = len(f[self.trajectory_key])
+                self.problem_count = len(f)
+
             # Try new format first, fall back to old mpinets format
-            try:
-                with MPNDataset(self.robot, self._database) as f:
-                    self.state_count = len(f[self.trajectory_key])
-                    self.problem_count = len(f)
-                self._use_mpinets_format = False
-            except Exception:
-                # Fall back to old mpinets format (direct h5py access)
-                import h5py
-                with h5py.File(str(self._database), "r") as f:
-                    if self.trajectory_key in f:
-                        traj_data = f[self.trajectory_key]
-                        self.problem_count = traj_data.shape[0]
-                        self.state_count = traj_data.shape[0] * traj_data.shape[1]  # num_problems * trajectory_length
-                        self.expert_length = traj_data.shape[1]  # trajectory length
-                    else:
-                        self.state_count = 0
-                        self.problem_count = 0
-                        self.expert_length = 0
-                self._use_mpinets_format = True
+            # try:
+            #     with MPNDataset(self.robot, self._database) as f:
+            #         self.state_count = len(f[self.trajectory_key])
+            #         self.problem_count = len(f)
+            #     self._use_mpinets_format = False
+            #     print("Dataset using Avoid Everything format")
+            # except Exception:
+            #     # Fall back to old mpinets format (direct h5py access)
+            #     import h5py
+            #     with h5py.File(str(self._database), "r") as f:
+            #         if self.trajectory_key in f:
+            #             traj_data = f[self.trajectory_key]
+            #             self.problem_count = traj_data.shape[0]
+            #             self.state_count = traj_data.shape[0] * traj_data.shape[1]  # num_problems * trajectory_length
+            #             self.expert_length = traj_data.shape[1]  # trajectory length
+            #         else:
+            #             self.state_count = 0
+            #             self.problem_count = 0
+            #             self.expert_length = 0
+            #     self._use_mpinets_format = True
+            #     print("Dataset using MPiNets format")
 
         self.num_obstacle_points = num_obstacle_points
         self.num_robot_points = num_robot_points
@@ -187,125 +193,125 @@ class Base(Dataset):
         )
         return self.robot.normalize_joints(configuration_tensor)
 
-    def get_inputs_mpinets(self, trajectory_idx: int) -> Dict[str, torch.Tensor]:
-        """
-        Loads data from old mpinets format (direct h5py access)
-        """
-        item = {}
-        import h5py
-        with h5py.File(str(self._database), "r") as f:
-            # Get target from last configuration in trajectory 
-            target_config = f[self.trajectory_key][trajectory_idx, -1, :]
-            assert isinstance(target_config, np.ndarray)
-            target_pose = self.robot.fk(target_config)[self.robot.tcp_link_name]
-            target_points = torch.as_tensor(
-                self.robot_sampler.sample_end_effector(
-                    target_pose,
-                )[..., :3]
-            ).float()
-            item["target_position"] = torch.as_tensor(target_pose[:3, 3]).float()
-            item["target_orientation"] = torch.as_tensor(target_pose[:3, :3]).float()
+    # def get_inputs_mpinets(self, trajectory_idx: int) -> Dict[str, torch.Tensor]:
+    #     """
+    #     Loads data from old mpinets format (direct h5py access)
+    #     """
+    #     item = {}
+    #     import h5py
+    #     with h5py.File(str(self._database), "r") as f:
+    #         # Get target from last configuration in trajectory 
+    #         target_config = f[self.trajectory_key][trajectory_idx, -1, :]
+    #         assert isinstance(target_config, np.ndarray)
+    #         target_pose = self.robot.fk(target_config)[self.robot.tcp_link_name].squeeze()
+    #         target_points = torch.as_tensor(
+    #             self.robot_sampler.sample_end_effector(
+    #                 target_pose,
+    #             )[..., :3]
+    #         ).float()
+    #         item["target_position"] = torch.as_tensor(target_pose[:3, 3]).float()
+    #         item["target_orientation"] = torch.as_tensor(target_pose[:3, :3]).float()
 
-            # Load obstacle data - same structure as mpinets format
-            item["cuboid_dims"] = torch.as_tensor(f["cuboid_dims"][trajectory_idx]).float()
-            item["cuboid_centers"] = torch.as_tensor(f["cuboid_centers"][trajectory_idx]).float()
-            cuboid_quats_tensor = torch.as_tensor(f["cuboid_quaternions"][trajectory_idx]).float()
+    #         # Load obstacle data - same structure as mpinets format
+    #         item["cuboid_dims"] = torch.as_tensor(f["cuboid_dims"][trajectory_idx]).float()
+    #         item["cuboid_centers"] = torch.as_tensor(f["cuboid_centers"][trajectory_idx]).float()
+    #         cuboid_quats_tensor = torch.as_tensor(f["cuboid_quaternions"][trajectory_idx]).float()
             
-            # Fix zero quaternions in tensor data before batching
-            cuboid_quat_norms = torch.norm(cuboid_quats_tensor, dim=1)
-            cuboid_invalid_mask = cuboid_quat_norms < 1e-8
-            cuboid_quats_tensor[cuboid_invalid_mask] = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=cuboid_quats_tensor.dtype)
-            item["cuboid_quats"] = cuboid_quats_tensor
+    #         # Fix zero quaternions in tensor data before batching
+    #         cuboid_quat_norms = torch.norm(cuboid_quats_tensor, dim=1)
+    #         cuboid_invalid_mask = cuboid_quat_norms < 1e-8
+    #         cuboid_quats_tensor[cuboid_invalid_mask] = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=cuboid_quats_tensor.dtype)
+    #         item["cuboid_quats"] = cuboid_quats_tensor
 
-            item["cylinder_radii"] = torch.as_tensor(f["cylinder_radii"][trajectory_idx]).float()
-            item["cylinder_heights"] = torch.as_tensor(f["cylinder_heights"][trajectory_idx]).float()
-            item["cylinder_centers"] = torch.as_tensor(f["cylinder_centers"][trajectory_idx]).float()
-            cylinder_quats_tensor = torch.as_tensor(f["cylinder_quaternions"][trajectory_idx]).float()
+    #         item["cylinder_radii"] = torch.as_tensor(f["cylinder_radii"][trajectory_idx]).float()
+    #         item["cylinder_heights"] = torch.as_tensor(f["cylinder_heights"][trajectory_idx]).float()
+    #         item["cylinder_centers"] = torch.as_tensor(f["cylinder_centers"][trajectory_idx]).float()
+    #         cylinder_quats_tensor = torch.as_tensor(f["cylinder_quaternions"][trajectory_idx]).float()
             
-            # Fix zero quaternions in tensor data before batching
-            cylinder_quat_norms = torch.norm(cylinder_quats_tensor, dim=1)
-            cylinder_invalid_mask = cylinder_quat_norms < 1e-8
-            cylinder_quats_tensor[cylinder_invalid_mask] = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=cylinder_quats_tensor.dtype)
-            item["cylinder_quats"] = cylinder_quats_tensor
+    #         # Fix zero quaternions in tensor data before batching
+    #         cylinder_quat_norms = torch.norm(cylinder_quats_tensor, dim=1)
+    #         cylinder_invalid_mask = cylinder_quat_norms < 1e-8
+    #         cylinder_quats_tensor[cylinder_invalid_mask] = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=cylinder_quats_tensor.dtype)
+    #         item["cylinder_quats"] = cylinder_quats_tensor
 
-            # Create obstacles from the data (similar to mpinets_data_loader.py)
-            if Cuboid is None or Cylinder is None:
-                raise ImportError("geometrout.primitive is required for mpinets format compatibility")
+    #         # Create obstacles from the data (similar to mpinets_data_loader.py)
+    #         if Cuboid is None or Cylinder is None:
+    #             raise ImportError("geometrout.primitive is required for mpinets format compatibility")
             
-            cuboid_dims = f["cuboid_dims"][trajectory_idx]
-            cuboid_centers = f["cuboid_centers"][trajectory_idx]
-            cuboid_quats = f["cuboid_quaternions"][trajectory_idx]
+    #         cuboid_dims = f["cuboid_dims"][trajectory_idx]
+    #         cuboid_centers = f["cuboid_centers"][trajectory_idx]
+    #         cuboid_quats = f["cuboid_quaternions"][trajectory_idx]
             
-            # Handle dimension expansion for single obstacles
-            if cuboid_dims.ndim == 1:
-                cuboid_dims = np.expand_dims(cuboid_dims, axis=0)
-            if cuboid_centers.ndim == 1:
-                cuboid_centers = np.expand_dims(cuboid_centers, axis=0)
-            if cuboid_quats.ndim == 1:
-                cuboid_quats = np.expand_dims(cuboid_quats, axis=0)
+    #         # Handle dimension expansion for single obstacles
+    #         if cuboid_dims.ndim == 1:
+    #             cuboid_dims = np.expand_dims(cuboid_dims, axis=0)
+    #         if cuboid_centers.ndim == 1:
+    #             cuboid_centers = np.expand_dims(cuboid_centers, axis=0)
+    #         if cuboid_quats.ndim == 1:
+    #             cuboid_quats = np.expand_dims(cuboid_quats, axis=0)
             
-            # Fix invalid quaternions (from mpinets format)
-            # Entries without a shape are stored with an invalid quaternion of all zeros
-            # This will cause NaNs later in the pipeline. It's best to set these to unit
-            # quaternions.
-            # To find invalid shapes, we just look for a dimension with size 0
-            # Also fix quaternions with very small norms that would cause NaN during normalization
-            zero_quat_mask = np.all(np.isclose(cuboid_quats, 0), axis=1)
-            small_norm_mask = np.linalg.norm(cuboid_quats, axis=1) < 1e-8
-            invalid_quat_mask = np.logical_or(zero_quat_mask, small_norm_mask)
-            cuboid_quats[invalid_quat_mask, 0] = 1
-            cuboid_quats[invalid_quat_mask, 1:] = 0
+    #         # Fix invalid quaternions (from mpinets format)
+    #         # Entries without a shape are stored with an invalid quaternion of all zeros
+    #         # This will cause NaNs later in the pipeline. It's best to set these to unit
+    #         # quaternions.
+    #         # To find invalid shapes, we just look for a dimension with size 0
+    #         # Also fix quaternions with very small norms that would cause NaN during normalization
+    #         zero_quat_mask = np.all(np.isclose(cuboid_quats, 0), axis=1)
+    #         small_norm_mask = np.linalg.norm(cuboid_quats, axis=1) < 1e-8
+    #         invalid_quat_mask = np.logical_or(zero_quat_mask, small_norm_mask)
+    #         cuboid_quats[invalid_quat_mask, 0] = 1
+    #         cuboid_quats[invalid_quat_mask, 1:] = 0
             
-            # Filter out zero-volume cuboids
-            cuboids = []
-            for i in range(len(cuboid_dims)):
-                if np.any(cuboid_dims[i] > 0):  # Non-zero volume
-                    cuboids.append(Cuboid(cuboid_centers[i], cuboid_dims[i], cuboid_quats[i]))
+    #         # Filter out zero-volume cuboids
+    #         cuboids = []
+    #         for i in range(len(cuboid_dims)):
+    #             if np.any(cuboid_dims[i] > 0):  # Non-zero volume
+    #                 cuboids.append(Cuboid(cuboid_centers[i], cuboid_dims[i], cuboid_quats[i]))
             
-            cylinder_radii = f["cylinder_radii"][trajectory_idx]
-            cylinder_heights = f["cylinder_heights"][trajectory_idx]
-            cylinder_centers = f["cylinder_centers"][trajectory_idx]
-            cylinder_quats = f["cylinder_quaternions"][trajectory_idx]
+    #         cylinder_radii = f["cylinder_radii"][trajectory_idx]
+    #         cylinder_heights = f["cylinder_heights"][trajectory_idx]
+    #         cylinder_centers = f["cylinder_centers"][trajectory_idx]
+    #         cylinder_quats = f["cylinder_quaternions"][trajectory_idx]
             
-            # Handle dimension expansion for single obstacles
-            if cylinder_radii.ndim == 1:
-                cylinder_radii = np.expand_dims(cylinder_radii, axis=0)
-            if cylinder_heights.ndim == 1:
-                cylinder_heights = np.expand_dims(cylinder_heights, axis=0)
-            if cylinder_centers.ndim == 1:
-                cylinder_centers = np.expand_dims(cylinder_centers, axis=0)
-            if cylinder_quats.ndim == 1:
-                cylinder_quats = np.expand_dims(cylinder_quats, axis=0)
+    #         # Handle dimension expansion for single obstacles
+    #         if cylinder_radii.ndim == 1:
+    #             cylinder_radii = np.expand_dims(cylinder_radii, axis=0)
+    #         if cylinder_heights.ndim == 1:
+    #             cylinder_heights = np.expand_dims(cylinder_heights, axis=0)
+    #         if cylinder_centers.ndim == 1:
+    #             cylinder_centers = np.expand_dims(cylinder_centers, axis=0)
+    #         if cylinder_quats.ndim == 1:
+    #             cylinder_quats = np.expand_dims(cylinder_quats, axis=0)
             
-            # Fix invalid quaternions (from mpinets format)
-            # Ditto to the comment above about fixing ill-formed quaternions
-            # Also fix quaternions with very small norms that would cause NaN during normalization
-            zero_quat_mask = np.all(np.isclose(cylinder_quats, 0), axis=1)
-            small_norm_mask = np.linalg.norm(cylinder_quats, axis=1) < 1e-8
-            invalid_quat_mask = np.logical_or(zero_quat_mask, small_norm_mask)
-            cylinder_quats[invalid_quat_mask, 0] = 1
-            cylinder_quats[invalid_quat_mask, 1:] = 0
+    #         # Fix invalid quaternions (from mpinets format)
+    #         # Ditto to the comment above about fixing ill-formed quaternions
+    #         # Also fix quaternions with very small norms that would cause NaN during normalization
+    #         zero_quat_mask = np.all(np.isclose(cylinder_quats, 0), axis=1)
+    #         small_norm_mask = np.linalg.norm(cylinder_quats, axis=1) < 1e-8
+    #         invalid_quat_mask = np.logical_or(zero_quat_mask, small_norm_mask)
+    #         cylinder_quats[invalid_quat_mask, 0] = 1
+    #         cylinder_quats[invalid_quat_mask, 1:] = 0
             
-            # Filter out zero-volume cylinders
-            cylinders = []
-            for i in range(len(cylinder_radii)):
-                if cylinder_radii[i] > 0 and cylinder_heights[i] > 0:
-                    cylinders.append(Cylinder(cylinder_centers[i], cylinder_radii[i].item(), cylinder_heights[i].item(), cylinder_quats[i]))
+    #         # Filter out zero-volume cylinders
+    #         cylinders = []
+    #         for i in range(len(cylinder_radii)):
+    #             if cylinder_radii[i] > 0 and cylinder_heights[i] > 0:
+    #                 cylinders.append(Cylinder(cylinder_centers[i], cylinder_radii[i].item(), cylinder_heights[i].item(), cylinder_quats[i]))
             
-            obstacles = cuboids + cylinders
-            scene_points = torch.as_tensor(
-                construct_mixed_point_cloud(obstacles, self.num_obstacle_points)[..., :3]
-            ).float()
+    #         obstacles = cuboids + cylinders
+    #         scene_points = torch.as_tensor(
+    #             construct_mixed_point_cloud(obstacles, self.num_obstacle_points)[..., :3]
+    #         ).float()
             
-            item["point_cloud"] = torch.cat((scene_points, target_points), dim=0)
-            item["point_cloud_labels"] = torch.cat(
-                (
-                    torch.ones(len(scene_points), 1),
-                    2 * torch.ones(len(target_points), 1),
-                )
-            )
+    #         item["point_cloud"] = torch.cat((scene_points, target_points), dim=0)
+    #         item["point_cloud_labels"] = torch.cat(
+    #             (
+    #                 torch.ones(len(scene_points), 1),
+    #                 2 * torch.ones(len(target_points), 1),
+    #             )
+    #         )
 
-        return item
+    #     return item
 
     def get_inputs(self, problem, flobs) -> Dict[str, torch.Tensor]:
         """
@@ -320,7 +326,7 @@ class Base(Dataset):
                                         and used for training
         """
         item = {}
-        target_pose = self.robot.fk(problem.target)[self.robot.tcp_link_name]
+        target_pose = self.robot.fk(problem.target)[self.robot.tcp_link_name].squeeze()
         target_points = torch.as_tensor(
             self.robot_sampler.sample_end_effector(
                 target_pose,
@@ -436,81 +442,82 @@ class TrajectoryDataset(Base):
         :rtype Dict[str, torch.Tensor]: Returns a dictionary that can be assembled
             by the data loader before using in training.
         """
-        if self._use_mpinets_format:
-            # Handle old mpinets format
-            import h5py
-            item = self.get_inputs_mpinets(pidx)
+        # if self._use_mpinets_format:
+        #     # Handle old mpinets format
+        #     import h5py
+        #     item = self.get_inputs_mpinets(pidx)
             
-            with h5py.File(str(self._database), "r") as f:
-                # Get initial configuration (first timestep)
-                config = f[self.trajectory_key][pidx, 0, :]
-                config_tensor = torch.as_tensor(config).float()
+        #     with h5py.File(str(self._database), "r") as f:
+        #         # Get initial configuration (first timestep)
+        #         config = f[self.trajectory_key][pidx, 0, :]
+        #         config_tensor = torch.as_tensor(config).float()
 
-                if self.train:
-                    # Add slight random noise to the joints
-                    randomized = (
-                        self.random_scale * torch.randn(config_tensor.shape) + config_tensor
-                    )
+        #         if self.train:
+        #             # Add slight random noise to the joints
+        #             randomized = (
+        #                 self.random_scale * torch.randn(config_tensor.shape) + config_tensor
+        #             )
 
-                    item["configuration"] = self.clamp_and_normalize(randomized)
-                    robot_points = self.robot_sampler.sample(
-                        randomized.numpy()
-                    )[:, :3]
-                else:
-                    item["configuration"] = self.clamp_and_normalize(config_tensor)
-                    robot_points = self.robot_sampler.sample(
-                        config_tensor.numpy(),
-                    )[:, :3]
-                robot_points = torch.as_tensor(robot_points).float()
+        #             item["configuration"] = self.clamp_and_normalize(randomized)
+        #             robot_points = self.robot_sampler.sample(
+        #                 randomized.numpy()
+        #             )[:, :3]
+        #         else:
+        #             item["configuration"] = self.clamp_and_normalize(config_tensor)
+        #             robot_points = self.robot_sampler.sample(
+        #                 config_tensor.numpy(),
+        #             )[:, :3]
+        #         robot_points = torch.as_tensor(robot_points).float()
 
-                item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
-                item["point_cloud_labels"] = torch.cat(
-                    (
-                        torch.zeros(len(robot_points), 1),
-                        item["point_cloud_labels"],
-                    )
-                )
-                # Get full expert trajectory
-                item["expert"] = torch.as_tensor(f[self.trajectory_key][pidx])
-            item["pidx"] = torch.as_tensor(pidx)
-            return item
-        else:
+        #         item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
+        #         item["point_cloud_labels"] = torch.cat(
+        #             (
+        #                 torch.zeros(len(robot_points), 1),
+        #                 item["point_cloud_labels"],
+        #             )
+        #         )
+        #         # Get full expert trajectory
+        #         item["expert"] = torch.as_tensor(f[self.trajectory_key][pidx])
+        #     item["pidx"] = torch.as_tensor(pidx)
+        #     return item
+        # else:
             # Handle new format
-            with MPNDataset(self.robot, self._database, "r") as f:
-                problem = f[self.trajectory_key].problem(pidx)
-                flobs = f[self.trajectory_key].flattened_obstacles(pidx)
-                item = self.get_inputs(problem, flobs)
-                config = f[self.trajectory_key].problem(pidx).q0
-                config_tensor = torch.as_tensor(config).float()
 
-                if self.train:
-                    # Add slight random noise to the joints
-                    randomized = (
-                        self.random_scale * torch.randn(config_tensor.shape) + config_tensor
-                    )
+        with MPNDataset(self.robot, self._database, "r") as f:
+            problem = f[self.trajectory_key].problem(pidx)
+            flobs = f[self.trajectory_key].flattened_obstacles(pidx)
+            item = self.get_inputs(problem, flobs)
+            config = f[self.trajectory_key].problem(pidx).q0
+            config_tensor = torch.as_tensor(config).float()
 
-                    item["configuration"] = self.clamp_and_normalize(randomized)
-                    robot_points = self.robot_sampler.sample(
-                        randomized.numpy()
-                    )[:, :3]
-                else:
-                    item["configuration"] = self.clamp_and_normalize(config_tensor)
-                    robot_points = self.robot_sampler.sample(
-                        config_tensor.numpy(),
-                    )[:, :3]
-                robot_points = torch.as_tensor(robot_points).float()
-
-                item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
-                item["point_cloud_labels"] = torch.cat(
-                    (
-                        torch.zeros(len(robot_points), 1),
-                        item["point_cloud_labels"],
-                    )
+            if self.train:
+                # Add slight random noise to the joints
+                randomized = (
+                    self.random_scale * torch.randn(config_tensor.shape) + config_tensor
                 )
-                item["expert"] = torch.as_tensor(f[self.trajectory_key].padded_expert(pidx))
-            item["pidx"] = torch.as_tensor(pidx)
 
-            return item
+                item["configuration"] = self.clamp_and_normalize(randomized)
+                robot_points = self.robot_sampler.sample(
+                    randomized.numpy()
+                )[:, :3]
+            else:
+                item["configuration"] = self.clamp_and_normalize(config_tensor)
+                robot_points = self.robot_sampler.sample(
+                    config_tensor.numpy(),
+                )[:, :3]
+            robot_points = torch.as_tensor(robot_points).float()
+
+            item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
+            item["point_cloud_labels"] = torch.cat(
+                (
+                    torch.zeros(len(robot_points), 1),
+                    item["point_cloud_labels"],
+                )
+            )
+            item["expert"] = torch.as_tensor(f[self.trajectory_key].padded_expert(pidx))
+        item["pidx"] = torch.as_tensor(pidx)
+
+        return item
 
 
 class StateDataset(Base):
@@ -596,104 +603,103 @@ class StateDataset(Base):
         :param idx int: Index represents the timestep within the trajectory
         :rtype Dict[str, torch.Tensor]: The data used for training
         """
-        if self._use_mpinets_format:
-            # Handle old mpinets format
-            import h5py
-            with h5py.File(str(self._database), "r") as f:
-                # Calculate trajectory and timestep from flat index
-                trajectory_idx, timestep = divmod(idx, self.expert_length)
+        # if self._use_mpinets_format:
+        #     # Handle old mpinets format
+        #     import h5py
+        #     with h5py.File(str(self._database), "r") as f:
+        #         # Calculate trajectory and timestep from flat index
+        #         trajectory_idx, timestep = divmod(idx, self.expert_length)
                 
-                item = self.get_inputs_mpinets(trajectory_idx)
+        #         item = self.get_inputs_mpinets(trajectory_idx)
                 
-                # Get current configuration
-                config = f[self.trajectory_key][trajectory_idx, timestep, :]
-                config_tensor = torch.as_tensor(config).float()
+        #         # Get current configuration
+        #         config = f[self.trajectory_key][trajectory_idx, timestep, :]
+        #         config_tensor = torch.as_tensor(config).float()
 
-                # Get supervision (next timesteps)
-                supervision_timesteps = []
-                for i in range(1, self.action_chunk_length + 1):
-                    sup_timestep = min(timestep + i, self.expert_length - 1)
-                    supervision_timesteps.append(f[self.trajectory_key][trajectory_idx, sup_timestep, :])
-                supervision = np.array(supervision_timesteps)
+        #         # Get supervision (next timesteps)
+        #         supervision_timesteps = []
+        #         for i in range(1, self.action_chunk_length + 1):
+        #             sup_timestep = min(timestep + i, self.expert_length - 1)
+        #             supervision_timesteps.append(f[self.trajectory_key][trajectory_idx, sup_timestep, :])
+        #         supervision = np.array(supervision_timesteps)
 
-                if self.train:
-                    # Add slight random noise to the joints
-                    randomized = (
-                        self.random_scale * torch.randn(config_tensor.shape) + config_tensor
-                    )
+        #         if self.train:
+        #             # Add slight random noise to the joints
+        #             randomized = (
+        #                 self.random_scale * torch.randn(config_tensor.shape) + config_tensor
+        #             )
 
-                    item["configuration"] = self.clamp_and_normalize(randomized)
-                    robot_points = self.robot_sampler.sample(
-                        randomized.numpy()
-                    )[:, :3]
-                else:
-                    item["configuration"] = self.clamp_and_normalize(config_tensor)
-                    robot_points = self.robot_sampler.sample(
-                        config_tensor.numpy()
-                    )[:, :3]
-                robot_points = torch.as_tensor(robot_points).float()
-                item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
-                item["point_cloud_labels"] = torch.cat(
-                    (
-                        torch.zeros(len(robot_points), 1),
-                        item["point_cloud_labels"],
-                    )
+        #             item["configuration"] = self.clamp_and_normalize(randomized)
+        #             robot_points = self.robot_sampler.sample(
+        #                 randomized.numpy()
+        #             )[:, :3]
+        #         else:
+        #             item["configuration"] = self.clamp_and_normalize(config_tensor)
+        #             robot_points = self.robot_sampler.sample(
+        #                 config_tensor.numpy()
+        #             )[:, :3]
+        #         robot_points = torch.as_tensor(robot_points).float()
+        #         item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
+        #         item["point_cloud_labels"] = torch.cat(
+        #             (
+        #                 torch.zeros(len(robot_points), 1),
+        #                 item["point_cloud_labels"],
+        #             )
+        #         )
+
+        #         item["idx"] = torch.as_tensor(idx)
+        #         supervision_tensor = torch.as_tensor(supervision).float()
+        #         item["supervision"] = self.clamp_and_normalize(supervision_tensor)
+
+        #     return item
+        # else:
+        with MPNDataset(self.robot, self._database, "r") as f:
+            pidx = f[self.trajectory_key].lookup_pidx(idx)
+            problem = f[self.trajectory_key].problem(pidx)
+            flobs = f[self.trajectory_key].flattened_obstacles(pidx)
+            item = self.get_inputs(problem, flobs)
+            configs = f[self.trajectory_key].state_range(
+                idx, lookahead=self.action_chunk_length + 1
+            )
+            config = configs[0]
+            supervision = configs[1:]
+            config_tensor = torch.as_tensor(config).float()
+
+            if self.train:
+                # Add slight random noise to the joints
+                randomized = (
+                    self.random_scale * torch.randn(config_tensor.shape) + config_tensor
                 )
 
-                item["idx"] = torch.as_tensor(idx)
-                supervision_tensor = torch.as_tensor(supervision).float()
-                item["supervision"] = self.clamp_and_normalize(supervision_tensor)
-
-            return item
-        else:
-            # Handle new format
-            with MPNDataset(self.robot, self._database, "r") as f:
-                pidx = f[self.trajectory_key].lookup_pidx(idx)
-                problem = f[self.trajectory_key].problem(pidx)
-                flobs = f[self.trajectory_key].flattened_obstacles(pidx)
-                item = self.get_inputs(problem, flobs)
-                configs = f[self.trajectory_key].state_range(
-                    idx, lookahead=self.action_chunk_length + 1
+                item["configuration"] = self.clamp_and_normalize(randomized)
+                robot_points = self.robot_sampler.sample(
+                    randomized.numpy()
+                )[:, :3]
+            else:
+                item["configuration"] = self.clamp_and_normalize(config_tensor)
+                robot_points = self.robot_sampler.sample(
+                    config_tensor.numpy()
+                )[:, :3]
+            robot_points = torch.as_tensor(robot_points).float()
+            item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
+            item["point_cloud_labels"] = torch.cat(
+                (
+                    torch.zeros(len(robot_points), 1),
+                    item["point_cloud_labels"],
                 )
-                config = configs[0]
-                supervision = configs[1:]
-                config_tensor = torch.as_tensor(config).float()
+            )
 
-                if self.train:
-                    # Add slight random noise to the joints
-                    randomized = (
-                        self.random_scale * torch.randn(config_tensor.shape) + config_tensor
-                    )
+            item["idx"] = torch.as_tensor(idx)
+            supervision_tensor = torch.as_tensor(supervision).float()
+            item["supervision"] = self.clamp_and_normalize(supervision_tensor)
 
-                    item["configuration"] = self.clamp_and_normalize(randomized)
-                    robot_points = self.robot_sampler.sample(
-                        randomized.numpy()
-                    )[:, :3]
-                else:
-                    item["configuration"] = self.clamp_and_normalize(config_tensor)
-                    robot_points = self.robot_sampler.sample(
-                        config_tensor.numpy()
-                    )[:, :3]
-                robot_points = torch.as_tensor(robot_points).float()
-                item["point_cloud"] = torch.cat((robot_points, item["point_cloud"]), dim=0)
-                item["point_cloud_labels"] = torch.cat(
-                    (
-                        torch.zeros(len(robot_points), 1),
-                        item["point_cloud_labels"],
-                    )
-                )
-
-                item["idx"] = torch.as_tensor(idx)
-                supervision_tensor = torch.as_tensor(supervision).float()
-                item["supervision"] = self.clamp_and_normalize(supervision_tensor)
-
-            return item
+        return item
 
 
 class DataModule(pl.LightningDataModule):
     def __init__(
         self,
-        robot: Robot,
+        urdf_path: str,
         data_dir: str,
         train_trajectory_key: str,
         val_trajectory_key: str,
@@ -707,7 +713,7 @@ class DataModule(pl.LightningDataModule):
         num_workers: int,
     ):
         super().__init__()
-        self.robot = robot
+        self.robot = Robot(urdf_path)
         self.data_dir = Path(data_dir)
         self.train_trajectory_key = train_trajectory_key
         self.val_trajectory_key = val_trajectory_key
@@ -833,7 +839,7 @@ class DataModule(pl.LightningDataModule):
             self.data_train,
             self.train_batch_size,
             num_workers=self.num_workers,
-            pin_memory=True,  # Restored significantly
+            pin_memory=True,
             shuffle=True,
         )
 
@@ -842,7 +848,7 @@ class DataModule(pl.LightningDataModule):
             self.data_dagger,
             self.val_batch_size,
             num_workers=self.num_workers,
-            pin_memory=True,  # Restored
+            pin_memory=True,
             shuffle=True,
         )
 
@@ -857,7 +863,7 @@ class DataModule(pl.LightningDataModule):
             self.data_val_state,
             self.train_batch_size,
             num_workers=self.num_workers,
-            pin_memory=True, 
+            pin_memory=True,
         )
         loaders[DatasetType.VAL] = DataLoader(
             self.data_val,
