@@ -17,6 +17,7 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
         self,
         urdf_path: str,
         num_robot_points: int,
+        robot_dof: int,
         point_match_loss_weight: float,
         collision_loss_weight: float,
         train_batch_size: int,
@@ -33,6 +34,7 @@ class ROPEMotionPolicyTransformer(PretrainingMotionPolicyTransformer):
         super().__init__(
             urdf_path,
             num_robot_points,
+            robot_dof,
             point_match_loss_weight,
             collision_loss_weight,
             train_batch_size,

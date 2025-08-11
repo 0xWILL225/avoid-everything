@@ -26,10 +26,10 @@ import os
 import random
 import sys
 import uuid
+import gc
 from pathlib import Path
 from typing import Any, Dict, Optional
 import psutil
-import gc
 
 import lightning.pytorch as pl
 import numpy as np
@@ -48,10 +48,10 @@ PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, PROJECT_ROOT)
 
 # Make deterministic-ish
-seed_value = 42
-torch.manual_seed(seed_value)
-random.seed(seed_value)
-np.random.seed(seed_value)
+SEED_VALUE = 42
+torch.manual_seed(SEED_VALUE)
+random.seed(SEED_VALUE)
+np.random.seed(SEED_VALUE)
 torch.set_float32_matmul_precision("high")
 
 

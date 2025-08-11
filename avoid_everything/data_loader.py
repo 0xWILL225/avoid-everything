@@ -781,7 +781,7 @@ class DataModule(pl.LightningDataModule):
                         num_target_points=self.num_target_points,
                         random_scale=0.0,
                     )
-                except:
+                except Exception:
                     self.data_mini_train = self.data_val
             else:
                 # Use validation data as fallback for mini_train if file doesn't exist

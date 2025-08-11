@@ -27,6 +27,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         self,
         urdf_path: str,
         num_robot_points: int,
+        robot_dof: int,
         point_match_loss_weight: float,
         collision_loss_weight: float,
         train_batch_size: int,
@@ -50,7 +51,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         :param collision_loss_weight float: The weight assigned to the collision loss
         :rtype Self: An instance of the network
         """
-        super().__init__(num_robot_points=num_robot_points)
+        super().__init__(num_robot_points=num_robot_points, robot_dof=robot_dof)
         # self.mpiformer = MotionPolicyTransformer(num_robot_points=num_robot_points)
 
         self.urdf_path = urdf_path

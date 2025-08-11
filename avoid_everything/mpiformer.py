@@ -167,6 +167,7 @@ class MotionPolicyTransformer(pl.LightningModule):
     def __init__(
         self,
         num_robot_points: int,
+        robot_dof: int,
         *,
         feature_dim: int = 4,
         n_heads: int = 8,
@@ -178,8 +179,8 @@ class MotionPolicyTransformer(pl.LightningModule):
         self.point_cloud_embedder = MPiFormerPointNet(
             num_robot_points, feature_dim, d_model
         )
-        self.feature_embedder = nn.Linear(7, d_model)
-        self.action_decoder = nn.Linear(d_model, 7)
+        self.feature_embedder = nn.Linear(robot_dof, d_model)
+        self.action_decoder = nn.Linear(d_model, robot_dof)
         encoder_layer = TransformerLayer(
             d_model=d_model,
             self_attn=MultiHeadAttention(

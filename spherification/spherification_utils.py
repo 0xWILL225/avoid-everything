@@ -1297,7 +1297,8 @@ def create_visualization_urdfs(urdf_path):
     for file in created_files:
       abs_files.append(convert_mesh_paths_to_absolute(file))
 
-    created_files.append(abs_files)  
+    for abs_file in abs_files:
+      created_files.append(str(abs_file))  
 
     if created_files:
         print(f"\nSUCCESS: Created {len(created_files)} visualization URDFs")
