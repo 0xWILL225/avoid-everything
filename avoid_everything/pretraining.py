@@ -218,7 +218,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
         )
         assert self.robot is not None
         collision_loss, point_match_loss = self.loss_fun(
-            y_hats.reshape(-1, self.robot.MAIN_DOF),
+            self.robot.unnormalize_joints(y_hats.reshape(-1, self.robot.MAIN_DOF)),
             cuboid_centers.repeat_interleave(self.action_chunk_length, dim=0),
             cuboid_dims.repeat_interleave(self.action_chunk_length, dim=0),
             cuboid_quats.repeat_interleave(self.action_chunk_length, dim=0),
@@ -226,7 +226,7 @@ class PretrainingMotionPolicyTransformer(MotionPolicyTransformer):
             cylinder_radii.repeat_interleave(self.action_chunk_length, dim=0),
             cylinder_heights.repeat_interleave(self.action_chunk_length, dim=0),
             cylinder_quats.repeat_interleave(self.action_chunk_length, dim=0),
-            supervision.reshape(-1, self.robot.MAIN_DOF),
+            self.robot.unnormalize_joints(supervision.reshape(-1, self.robot.MAIN_DOF)),
         )
         return collision_loss, point_match_loss
 
