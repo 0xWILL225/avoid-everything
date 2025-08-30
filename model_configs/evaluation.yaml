@@ -58,4 +58,4 @@ stop_early: false
 save_checkpoint_dir: /workspace/checkpoints
 experiment_name: EvaluationExperiment
 description: "Evaluate mpiformer"
-load_checkpoint_path: /workspace/checkpoints/mpiformer_cubby.ckpt
+load_checkpoint_path: /workspace/checkpoints/avoid_everything_cubby.ckpt

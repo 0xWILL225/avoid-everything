@@ -41,6 +41,8 @@ def run(cfg_path):
         batch = {key: val.cuda() for key, val in batch.items()}
         mdl.trajectory_validation_step(batch, DatasetType.VAL)
     print("Collision Rate:", f"{mdl.val_collision_rate.compute().item():.2%}")
+    print("Reaching Success Rate:", f"{mdl.val_reaching_success_rate.compute().item():.2%}")
+    print("Success Rate:", f"{mdl.val_success_rate.compute().item():.2%}")
     print(
         "Target Position Error:",
         f"{100 * mdl.val_position_error.compute().item():.2}cm",
